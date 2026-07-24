@@ -10,6 +10,17 @@ from pathlib import Path
 
 def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
+    # Windows consoles commonly default to a legacy code page (cp1252) that
+    # cannot encode the status glyphs in our log messages, e.g. the check and
+    # cross in ComputeCapabilities.summary(). Without this the first startup
+    # log raises UnicodeEncodeError and the capability line is lost.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):  # detached or non-reconfigurable stream
+                pass
     logging.basicConfig(
         level=level,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
