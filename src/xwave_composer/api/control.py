@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import io
 import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -59,6 +60,11 @@ class RefineBody(BaseModel):
     steps: int | None = None
     cfg: float | None = None
     seed: int | None = None
+    preview: bool = Field(
+        default=False,
+        description="Fast low-resolution pass for interactive feedback. Export and "
+        "refine always re-render at full quality first, so a preview is never saved.",
+    )
 
 
 class ImproveBody(BaseModel):
@@ -68,6 +74,10 @@ class ImproveBody(BaseModel):
         default=None, description='"layer", "output", or null to choose automatically.'
     )
     apply: bool = Field(default=False, description="Write the improved prompt straight back.")
+
+
+class ApplyBody(BaseModel):
+    text: str | None = None
 
 
 class ExportBody(BaseModel):
@@ -156,6 +166,19 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
     @router.get("/state")
     def get_state() -> dict[str, Any]:
         return _state(session)
+
+    # The studio page is plain HTML on top of these routes. It is read from
+    # disk per request rather than cached, so the front end can be edited and
+    # reloaded without restarting the app -- which otherwise means waiting for
+    # the models to load again.
+    studio_file = Path(__file__).with_name("studio.html")
+
+    @router.get("/studio", response_class=HTMLResponse)
+    def studio() -> HTMLResponse:
+        try:
+            return HTMLResponse(studio_file.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"studio.html missing: {exc}") from None
 
     @router.post("/load")
     def load_models() -> dict[str, Any]:
@@ -254,7 +277,7 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
         if body.seed is not None:
             s.seed = int(body.seed)
         work = session.refresh_work()
-        session.run_output(work)
+        session.run_output(work, preview=body.preview)
         return {"state": _state(session)}
 
     @router.post("/improve")
@@ -278,8 +301,11 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
         }
 
     @router.post("/improve/apply")
-    def improve_apply() -> dict[str, Any]:
-        return {"message": session.apply_improved(), "state": _state(session)}
+    def improve_apply(body: ApplyBody | None = None) -> dict[str, Any]:
+        # text lets the caller apply an edited version of the proposal, so the
+        # model suggests and the person decides on the final wording.
+        text = body.text if body is not None else None
+        return {"message": session.apply_improved(text), "state": _state(session)}
 
     @router.get("/improve/history")
     def improve_history() -> dict[str, Any]:
@@ -318,6 +344,14 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
             raise HTTPException(status_code=404, detail="Nothing composed yet.")
         return _png(image)
 
+    @router.get("/render/background.png")
+    def render_background() -> Response:
+        """The backdrop alone. work.png is the full composite, so a client that
+        draws its own layers needs this or it paints every sticker twice."""
+        if session.doc.background is None:
+            raise HTTPException(status_code=404, detail="No background yet.")
+        return _png(session.doc.background)
+
     @router.get("/render/output.png")
     def render_output() -> Response:
         if session.last_output is None:
@@ -332,5 +366,12 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
         return _png(obj.image)
 
     app.include_router(router)
-    logger.info("Control API mounted at /control")
+
+    # Also expose it at the short path. Gradio owns "/", so the studio lives
+    # beside it rather than replacing it -- the expert UI stays one click away.
+    @app.get("/studio", response_class=HTMLResponse)
+    def studio_root() -> HTMLResponse:
+        return studio()
+
+    logger.info("Control API mounted at /control; studio UI at /studio")
     return router
