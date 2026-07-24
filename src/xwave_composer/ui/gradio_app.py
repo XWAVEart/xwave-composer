@@ -900,6 +900,28 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 # Live events synchronize the transform without starting SDXL.
                 return tuple(gr.update() for _ in pack_out)
 
+            if atype == "history_push":
+                # Sent on pointer-down, before a drag mutates the pose. The
+                # gesture's live transforms have not been applied yet, so this
+                # is the only moment the pre-drag state still exists.
+                session.push_history()
+                # A click that also changes selection carries it here rather
+                # than as a second action, because the bridge holds one action
+                # at a time and the later write would win.
+                sid = data.get("select")
+                if sid:
+                    session.select_layer_id(str(sid))
+                    return pack(run_out=False)
+                return tuple(gr.update() for _ in pack_out)
+
+            if atype == "undo":
+                session.undo()
+                return pack(run_out=True)
+
+            if atype == "redo":
+                session.redo()
+                return pack(run_out=True)
+
             if atype == "select":
                 sid = data.get("id")
                 if sid == "__bg__":

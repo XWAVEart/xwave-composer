@@ -6,8 +6,9 @@ import hashlib
 import logging
 import random
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -28,6 +29,11 @@ from xwave_composer.optimization import (
 from xwave_composer.style.style_manager import StyleManager, build_output_prompt
 
 logger = logging.getLogger(__name__)
+
+# How many composition states to keep for undo. Snapshots hold references to
+# the existing ObjectLayer objects rather than copies of their images, so the
+# cost per entry is small.
+HISTORY_LIMIT = 40
 
 
 @dataclass
@@ -78,6 +84,8 @@ class ComposerSession:
     pending_prompt: str = ""
     pending_isolation_prompt: str = ""
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _undo_stack: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    _redo_stack: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
         self.config.ensure_dirs()
@@ -735,8 +743,9 @@ class ComposerSession:
         with self._lock:
             lid = layer_id or self.doc.selected_id
             if lid:
+                self.push_history()
                 self.doc.remove_object(lid)
-                self.status = f"Deleted layer {lid}."
+                self.status = f"Deleted layer {lid}. Ctrl+Z to restore."
             self.last_work = compose_work_image(self.doc)
             return self.last_work
 
@@ -752,9 +761,74 @@ class ComposerSession:
 
     def reorder_layers(self, ordered_ids: list[str]) -> Image.Image:
         with self._lock:
+            self.push_history()
             self.doc.reorder_by_ids(ordered_ids)
             self.last_work = compose_work_image(self.doc)
             self.status = "Layer order updated."
+            return self.last_work
+
+    # ------------------------------------------------------------------ history
+    def _snapshot(self) -> dict[str, Any]:
+        """Capture composition state: layer set, draw order, poses, selection.
+
+        Layer objects are stored by reference, so a snapshot does not copy the
+        generated images. That also means undo can restore a deleted layer,
+        because the snapshot keeps the only remaining reference to it.
+        Transforms are copied, since those are mutated in place.
+        """
+        return {
+            "objects": list(self.doc.objects),
+            "transforms": {o.id: replace(o.transform) for o in self.doc.objects},
+            "selected_id": self.doc.selected_id,
+        }
+
+    def _restore(self, snap: dict[str, Any]) -> None:
+        self.doc.objects = list(snap["objects"])
+        for obj in self.doc.objects:
+            saved = snap["transforms"].get(obj.id)
+            if saved is not None:
+                obj.transform = replace(saved)
+        selected = snap["selected_id"]
+        known = {o.id for o in self.doc.objects}
+        self.doc.selected_id = selected if selected in known else None
+
+    def push_history(self) -> None:
+        """Record the current state as an undo point, before a mutating edit."""
+        with self._lock:
+            self._undo_stack.append(self._snapshot())
+            # Drop the oldest entries past the limit.
+            del self._undo_stack[:-HISTORY_LIMIT]
+            # A new edit invalidates any redo branch.
+            self._redo_stack.clear()
+
+    @property
+    def can_undo(self) -> bool:
+        return bool(self._undo_stack)
+
+    @property
+    def can_redo(self) -> bool:
+        return bool(self._redo_stack)
+
+    def undo(self) -> Image.Image:
+        with self._lock:
+            if not self._undo_stack:
+                self.status = "Nothing to undo."
+                return self.refresh_work()
+            self._redo_stack.append(self._snapshot())
+            self._restore(self._undo_stack.pop())
+            self.status = f"Undo ({len(self._undo_stack)} left)."
+            self.last_work = compose_work_image(self.doc)
+            return self.last_work
+
+    def redo(self) -> Image.Image:
+        with self._lock:
+            if not self._redo_stack:
+                self.status = "Nothing to redo."
+                return self.refresh_work()
+            self._undo_stack.append(self._snapshot())
+            self._restore(self._redo_stack.pop())
+            self.status = f"Redo ({len(self._redo_stack)} left)."
+            self.last_work = compose_work_image(self.doc)
             return self.last_work
 
     # ------------------------------------------------------------------- output

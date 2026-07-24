@@ -24,6 +24,8 @@
     viewScale: 1,
     lastSceneB64: "",
     liveTimer: null,
+    nudging: false,
+    nudgeTimer: null,
   };
 
   function $(id) {
@@ -280,13 +282,108 @@
     return null;
   }
 
+  /**
+   * Is this point on a visible pixel of the layer, rather than merely inside
+   * its bounding box? Object layers are cut-outs, so their boxes are mostly
+   * transparent and box-only hit testing would make a truck behave like the
+   * rectangle it arrived in.
+   *
+   * The alpha map is cached on the image element, so it survives scene
+   * updates and is rebuilt only when the image itself changes.
+   */
+  function opaqueAt(layer, loc, sz) {
+    const img = layer._img;
+    if (!img || !img.complete || !img.naturalWidth) return true;
+    if (img._alpha === undefined) {
+      try {
+        // Hit testing does not need full resolution.
+        const MAXD = 256;
+        const k = Math.min(1, MAXD / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.naturalWidth * k));
+        c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        const cx = c.getContext("2d", { willReadFrequently: true });
+        cx.drawImage(img, 0, 0, c.width, c.height);
+        img._alpha = {
+          d: cx.getImageData(0, 0, c.width, c.height).data,
+          w: c.width,
+          h: c.height,
+        };
+      } catch (e) {
+        img._alpha = null; // tainted canvas — fall back to the bounding box
+      }
+    }
+    if (!img._alpha) return true;
+    const u = (loc.x + sz.w / 2) / sz.w;
+    const v = (loc.y + sz.h / 2) / sz.h;
+    const px = Math.min(img._alpha.w - 1, Math.max(0, Math.floor(u * img._alpha.w)));
+    const py = Math.min(img._alpha.h - 1, Math.max(0, Math.floor(v * img._alpha.h)));
+    return img._alpha.d[(py * img._alpha.w + px) * 4 + 3] > 8;
+  }
+
+  /** Topmost layer under the point, ignoring which layer is selected. */
+  function hitTestAny(p) {
+    // state.layers is bottom-to-top draw order, so scan from the top down.
+    for (let i = state.layers.length - 1; i >= 0; i--) {
+      const layer = state.layers[i];
+      if (layer.visible === false) continue;
+      const sz = layerSize(layer);
+      const loc = toLocal(layer, p);
+      if (loc.x < -sz.w / 2 || loc.x > sz.w / 2) continue;
+      if (loc.y < -sz.h / 2 || loc.y > sz.h / 2) continue;
+      if (!opaqueAt(layer, loc, sz)) continue;
+      return layer;
+    }
+    return null;
+  }
+
+  function selectedLayer() {
+    return (
+      state.layers.find(function (l) {
+        return l.id === state.selectedId;
+      }) || null
+    );
+  }
+
   function onDown(evt) {
-    evt.preventDefault();
-    // Selection is menu-only. Empty canvas clicks do not deselect.
-    if (!state.selectedId || state.selectedId === "__bg__") return;
+    // Primary button only; ignore right-click and pen barrel buttons.
+    if (evt.button !== undefined && evt.button !== 0) return;
     const p = canvasPoint(evt);
-    const hit = hitTest(p);
-    if (!hit) return;
+
+    // Check the selected layer first so its resize and rotate handles keep
+    // priority when objects overlap. This is what made selection menu-only
+    // originally: handles must not jump to whatever sits under the cursor.
+    let hit = hitTest(p);
+    let selectId = null;
+
+    if (!hit) {
+      // Nothing on the selected layer, so fall back to direct selection:
+      // clicking an object picks it up, the way any layered editor behaves.
+      // Transparent pixels fall through to the layer underneath.
+      const under = hitTestAny(p);
+      if (!under) return; // empty canvas keeps the current selection
+      if (under.id !== state.selectedId) {
+        // Apply locally straight away so the drag starts on this frame
+        // instead of waiting for the server to echo the selection back.
+        state.selectedId = under.id;
+        selectId = under.id;
+        draw();
+      }
+      hit = { layer: under, mode: "move" };
+    }
+
+    evt.preventDefault();
+    if (evt.pointerId !== undefined && evt.currentTarget.setPointerCapture) {
+      try {
+        evt.currentTarget.setPointerCapture(evt.pointerId);
+      } catch (e) {
+        /* capture is an optimisation, not a requirement */
+      }
+    }
+    // Record the pose before the drag changes it. The action bridge is a
+    // single slot, so any selection change rides along instead of being sent
+    // as a second message that would overwrite this one.
+    emitAction({ type: "history_push", select: selectId });
     state.drag = {
       mode: hit.mode,
       start: p,
@@ -333,16 +430,87 @@
     emitTransform(true);
   }
 
+  // ── keyboard ─────────────────────────────────────────────────
+  function isTextTarget(el) {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    const tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  }
+
+  function scheduleNudgeCommit() {
+    if (state.nudgeTimer) clearTimeout(state.nudgeTimer);
+    state.nudgeTimer = setTimeout(function () {
+      state.nudgeTimer = null;
+      state.nudging = false;
+      emitTransform(true);
+    }, 400);
+  }
+
+  function onKeyDown(evt) {
+    // The page is full of prompt boxes and number fields. Never take a key
+    // that the user is aiming at one of them.
+    if (isTextTarget(evt.target)) return;
+
+    const mod = evt.ctrlKey || evt.metaKey;
+    const key = evt.key;
+
+    if (mod && (key === "z" || key === "Z")) {
+      evt.preventDefault();
+      emitAction({ type: evt.shiftKey ? "redo" : "undo" });
+      return;
+    }
+    if (mod && (key === "y" || key === "Y")) {
+      evt.preventDefault();
+      emitAction({ type: "redo" });
+      return;
+    }
+
+    const layer = selectedLayer();
+    if (!layer) return;
+
+    if (key === "Delete" || key === "Backspace") {
+      evt.preventDefault();
+      emitAction({ type: "delete", id: layer.id });
+      return;
+    }
+
+    const step = evt.shiftKey ? 10 : 1;
+    let dx = 0;
+    let dy = 0;
+    if (key === "ArrowLeft") dx = -step;
+    else if (key === "ArrowRight") dx = step;
+    else if (key === "ArrowUp") dy = -step;
+    else if (key === "ArrowDown") dy = step;
+    else return;
+
+    evt.preventDefault();
+    if (!state.nudging) {
+      // One undo entry for a burst of arrow presses, not one per pixel.
+      state.nudging = true;
+      emitAction({ type: "history_push" });
+    }
+    layer.x += dx;
+    layer.y += dy;
+    draw();
+    scheduleNudgeCommit();
+  }
+
   function ensureCanvasBound() {
     const canvas = $("xwave-work-canvas");
     if (!canvas || canvas._xwaveBound) return;
     canvas._xwaveBound = true;
-    canvas.addEventListener("mousedown", onDown);
+    // Pointer events cover mouse, pen and touch through one path, which is
+    // what the spec's "open it from any device" case needs. The matching
+    // touch-action: none already lives in app.css.
+    canvas.addEventListener("pointerdown", onDown);
     if (!window._xwaveWinBound) {
       window._xwaveWinBound = true;
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
       window.addEventListener("resize", draw);
+      window.addEventListener("keydown", onKeyDown);
     }
   }
 
