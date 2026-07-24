@@ -113,7 +113,30 @@ def main(argv: list[str] | None = None) -> int:
 
     from xwave_composer.ui.gradio_app import _launch_kwargs
 
-    demo.queue(default_concurrency_limit=1).launch(**_launch_kwargs(demo, config))
+    log = logging.getLogger(__name__)
+    launch_kwargs = _launch_kwargs(demo, config)
+    # Launch without blocking so the control API can be attached to the FastAPI
+    # app Gradio builds, then block explicitly. One process, one port, one copy
+    # of the models shared by the UI and any script driving it.
+    demo.queue(default_concurrency_limit=1).launch(prevent_thread_lock=True, **launch_kwargs)
+
+    session = getattr(demo, "_xwave_session", None)
+    fastapi_app = getattr(demo, "app", None)
+    if session is not None and fastapi_app is not None:
+        try:
+            from xwave_composer.api.control import register_control_api
+
+            register_control_api(fastapi_app, session)
+            log.info(
+                "Control API ready: http://127.0.0.1:%s/control/state",
+                launch_kwargs.get("server_port", 7860),
+            )
+        except Exception:  # noqa: BLE001 - the UI must still come up
+            log.exception("Control API failed to mount; the UI is unaffected")
+    else:
+        log.warning("Control API not mounted (no session or app on the Blocks object)")
+
+    demo.block_thread()
     return 0
 
 
