@@ -17,6 +17,39 @@ def test_compose_background_only():
     assert out.getpixel((0, 0)) == (10, 20, 30)
 
 
+def test_compose_background_flip_x():
+    doc = WorkDocument(width=64, height=32)
+    # Left half red, right half blue — flip X should swap them.
+    bg = Image.new("RGB", (64, 32), (0, 0, 255))
+    for x in range(32):
+        for y in range(32):
+            bg.putpixel((x, y), (255, 0, 0))
+    doc.background = bg
+    doc.bg_flip_x = True
+    out = compose_work_image(doc)
+    assert out.getpixel((8, 16))[2] > 200  # blue on left after flip
+    assert out.getpixel((56, 16))[0] > 200  # red on right after flip
+
+
+def test_compose_background_scale_zoom():
+    doc = WorkDocument(width=64, height=64)
+    doc.background = Image.new("RGB", (64, 64), (12, 34, 56))
+    doc.bg_scale = 2.0
+    out = compose_work_image(doc)
+    assert out.size == (64, 64)
+    assert out.getpixel((32, 32)) == (12, 34, 56)
+
+
+def test_compose_background_offset():
+    doc = WorkDocument(width=64, height=64)
+    # Solid red; after +16 X offset the left edge should show the blank fill.
+    doc.background = Image.new("RGB", (64, 64), (200, 10, 10))
+    doc.bg_offset_x = 16
+    out = compose_work_image(doc)
+    assert out.getpixel((0, 32)) != (200, 10, 10)
+    assert out.getpixel((48, 32)) == (200, 10, 10)
+
+
 def test_compose_object_centered():
     doc = WorkDocument(width=200, height=200)
     doc.background = Image.new("RGB", (200, 200), (0, 0, 0))
@@ -76,6 +109,12 @@ def test_build_output_prompt_order():
 
     p_psc = build_output_prompt(doc, preset, order="psc")
     assert p_psc == "oil painting of, rich textures, painterly, forest, fox, cabin"
+
+    p_cps = build_output_prompt(doc, preset, order="cps")
+    assert p_cps == "forest, fox, cabin, oil painting of, rich textures, painterly"
+
+    p_spc = build_output_prompt(doc, preset, order="spc")
+    assert p_spc == "rich textures, painterly, oil painting of, forest, fox, cabin"
 
 
 def test_build_output_prompt_manual_style():

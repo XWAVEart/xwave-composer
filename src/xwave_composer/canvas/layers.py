@@ -82,6 +82,14 @@ class WorkDocument:
     height: int = 1024
     background: Image.Image | None = None
     background_prompt: str = ""
+    # Background placement on the canvas (center-anchored). Scale 1.0 matches
+    # the previous fill-to-canvas size; flip/rotation apply around center.
+    bg_scale: float = 1.0
+    bg_rotation: float = 0.0
+    bg_offset_x: float = 0.0
+    bg_offset_y: float = 0.0
+    bg_flip_x: bool = False
+    bg_flip_y: bool = False
     objects: list[ObjectLayer] = field(default_factory=list)
     selected_id: str | None = None
 

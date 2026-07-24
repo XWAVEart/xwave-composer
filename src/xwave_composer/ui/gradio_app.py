@@ -80,7 +80,22 @@ NO_STYLE = "— none —"
 CONCAT_ORDERS = {
     "Prefix · Prompts · Suffix": "pcs",
     "Prefix · Suffix · Prompts": "psc",
+    "Prompts · Prefix · Suffix": "cps",
+    "Suffix · Prefix · Prompts": "spc",
 }
+
+ISO_WHITE = "isolated on plain white background, centered"
+ISO_BLACK = "isolated on plain black background, centered"
+ISO_BACKDROPS = ("White", "Black")
+
+
+def _iso_backdrop_label(prompt: str | None) -> str:
+    text = (prompt or "").lower()
+    return "Black" if "black" in text else "White"
+
+
+def _iso_prompt_for_backdrop(label: str | None) -> str:
+    return ISO_BLACK if str(label or "").strip().title() == "Black" else ISO_WHITE
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +179,12 @@ def _scene_dict(session: ComposerSession) -> dict[str, Any]:
         "layers": layers,
         "bg_data_url": _data_url("bg", session.doc.background, 1024),
         "bg_prompt": session.doc.background_prompt,
+        "bg_scale": float(session.doc.bg_scale),
+        "bg_rotation": float(session.doc.bg_rotation),
+        "bg_offset_x": float(session.doc.bg_offset_x),
+        "bg_offset_y": float(session.doc.bg_offset_y),
+        "bg_flip_x": bool(session.doc.bg_flip_x),
+        "bg_flip_y": bool(session.doc.bg_flip_y),
         "rev": int(time.time() * 1000) % 10_000_000,
     }
 
@@ -215,9 +236,16 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "kind": "background",
             "prompt": session.doc.background_prompt or "",
             "opacity": 1.0,
-            "iso": "",
+            "iso_backdrop": "White",
+            "rotation": float(session.doc.bg_rotation),
             "raw": None,
             "prompt_enabled": True,
+            "bg_scale": float(session.doc.bg_scale),
+            "bg_rotation": float(session.doc.bg_rotation),
+            "bg_offset_x": float(session.doc.bg_offset_x),
+            "bg_offset_y": float(session.doc.bg_offset_y),
+            "bg_flip_x": bool(session.doc.bg_flip_x),
+            "bg_flip_y": bool(session.doc.bg_flip_y),
         }
     obj = session.doc.selected()
     if obj is None:
@@ -225,17 +253,31 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "kind": "none",
             "prompt": "",
             "opacity": 1.0,
-            "iso": "",
+            "iso_backdrop": "White",
+            "rotation": 0.0,
             "raw": None,
             "prompt_enabled": True,
+            "bg_scale": 1.0,
+            "bg_rotation": 0.0,
+            "bg_offset_x": 0.0,
+            "bg_offset_y": 0.0,
+            "bg_flip_x": False,
+            "bg_flip_y": False,
         }
     return {
         "kind": "object",
         "prompt": obj.prompt or "",
         "opacity": float(obj.transform.opacity),
-        "iso": obj.isolation_prompt or "",
+        "iso_backdrop": _iso_backdrop_label(obj.isolation_prompt),
+        "rotation": float(obj.transform.rotation),
         "raw": obj.raw_image,
         "prompt_enabled": obj.prompt_enabled,
+        "bg_scale": 1.0,
+        "bg_rotation": 0.0,
+        "bg_offset_x": 0.0,
+        "bg_offset_y": 0.0,
+        "bg_flip_x": False,
+        "bg_flip_y": False,
     }
 
 
@@ -341,8 +383,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
     def pack(run_out: bool = True, sync_out: bool = False) -> tuple:
         """-> work_html, layers_html, output, status,
-        insp_prompt, insp_iso, insp_opacity, raw_view, prompt_view,
-        llm_prompt_view, mute_prompt_btn"""
+        insp_prompt, iso_backdrop, insp_opacity, raw_view, prompt_view,
+        llm_prompt_view, mute_prompt_btn, cutout_chk, obj_rotation,
+        bg_scale, bg_rotation, bg_offset_x, bg_offset_y, bg_flip_x, bg_flip_y"""
         work = _work(session)
         if sync_out:
             # Cancel a sleeping debounce worker. Normal editing actions return
@@ -359,6 +402,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         kind = insp["kind"]
         fields_on = kind != "none"
         obj_on = kind == "object"
+        bg_on = kind == "background"
+        cutout_on = obj_on and bool(session.layer_cutout)
         scene = _scene_dict(session)
         s = session.output_settings
         llm_on = bool(s.use_llm_rewrite)
@@ -378,8 +423,12 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             _output_jpeg_path(out),
             session.status,
             gr.update(value=insp["prompt"], interactive=fields_on),
-            gr.update(value=insp["iso"], interactive=obj_on, visible=obj_on),
-            gr.update(value=insp["opacity"], interactive=obj_on),
+            gr.update(
+                value=insp["iso_backdrop"],
+                interactive=cutout_on,
+                visible=cutout_on,
+            ),
+            gr.update(value=insp["opacity"], interactive=obj_on, visible=obj_on),
             gr.update(value=insp["raw"], visible=insp["raw"] is not None),
             concat_val,
             gr.update(value=llm_val, visible=llm_on),
@@ -391,6 +440,17 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 ),
                 interactive=obj_on,
             ),
+            gr.update(
+                value=bool(session.layer_cutout),
+                visible=obj_on,
+            ),
+            gr.update(value=insp["rotation"], visible=obj_on),
+            gr.update(value=insp["bg_scale"], visible=bg_on),
+            gr.update(value=insp["bg_rotation"], visible=bg_on),
+            gr.update(value=insp["bg_offset_x"], visible=bg_on),
+            gr.update(value=insp["bg_offset_y"], visible=bg_on),
+            gr.update(value=insp["bg_flip_x"], visible=bg_on),
+            gr.update(value=insp["bg_flip_y"], visible=bg_on),
         )
 
     with gr.Blocks(title="xwave-composer", elem_classes=["xwave-app"]) as demo:
@@ -524,6 +584,14 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         elem_classes=["xwave-add-btn"],
                     )
                 layers_html = gr.HTML(value=render_layers_html(session), padding=False)
+                with gr.Row(elem_classes=["xwave-canvas-size"]):
+                    aspect = gr.Dropdown(
+                        label="Canvas size",
+                        choices=list(ASPECT_PRESETS.keys()),
+                        value="1024×1024",
+                        scale=2,
+                    )
+                    apply_size_btn = gr.Button("Apply", size="sm", scale=0, min_width=70)
 
             with gr.Column(scale=3, min_width=420, elem_classes=["xwave-col", "xwave-props-col"]):
                 with gr.Row(elem_classes=["xwave-props-grid"]):
@@ -537,16 +605,63 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             lines=2,
                             max_lines=3,
                         )
-                        insp_iso = gr.Textbox(
-                            label="Isolation prompt",
-                            value="isolated on plain white background, centered",
-                            lines=1,
+                        iso_backdrop = gr.Radio(
+                            choices=list(ISO_BACKDROPS),
+                            value="White",
+                            label="Isolate on",
                             visible=False,
                         )
                         cutout_chk = gr.Checkbox(
                             label="Cut out object (uncheck to place the full image)",
                             value=True,
+                            visible=False,
                         )
+                        obj_rotation = gr.Number(
+                            label="Rotation °",
+                            value=0.0,
+                            precision=1,
+                            step=1.0,
+                            visible=False,
+                        )
+                        with gr.Row(elem_classes=["xwave-bg-xform"]):
+                            bg_scale = gr.Number(
+                                label="Scale",
+                                value=1.0,
+                                precision=3,
+                                minimum=0.05,
+                                maximum=8.0,
+                                step=0.05,
+                                visible=True,
+                            )
+                            bg_rotation = gr.Number(
+                                label="Rotation °",
+                                value=0.0,
+                                precision=1,
+                                step=1.0,
+                                visible=True,
+                            )
+                        with gr.Row(elem_classes=["xwave-bg-offset"]):
+                            bg_offset_x = gr.Number(
+                                label="Offset X",
+                                value=0.0,
+                                precision=1,
+                                step=1.0,
+                                visible=True,
+                            )
+                            bg_offset_y = gr.Number(
+                                label="Offset Y",
+                                value=0.0,
+                                precision=1,
+                                step=1.0,
+                                visible=True,
+                            )
+                        with gr.Row(elem_classes=["xwave-bg-flip"]):
+                            bg_flip_x = gr.Checkbox(
+                                label="Flip X", value=False, visible=True,
+                            )
+                            bg_flip_y = gr.Checkbox(
+                                label="Flip Y", value=False, visible=True,
+                            )
                         with gr.Row():
                             gen_seed = gr.Number(
                                 value=-1, precision=0, show_label=False, container=False,
@@ -627,37 +742,34 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             lines=2,
                             max_lines=3,
                         )
-                        with gr.Row():
-                            use_llm = gr.Checkbox(label="LLM rewrite", value=False, scale=1)
+                        with gr.Row(elem_classes=["xwave-seed-row"]):
                             out_seed = gr.Number(
                                 label="Seed",
                                 value=session.output_settings.seed,
                                 precision=0,
-                                scale=1,
+                                scale=2,
                                 min_width=100,
                             )
                             roll_seed_btn = gr.Button(
                                 "Roll seed", size="sm", scale=0, min_width=88
                             )
-                        with gr.Row():
-                            aspect = gr.Dropdown(
-                                label="Canvas size",
-                                choices=list(ASPECT_PRESETS.keys()),
-                                value="1024×1024",
-                                scale=2,
-                            )
-                            apply_size_btn = gr.Button("Apply", size="sm", scale=0, min_width=70)
                         # Concatenation result (always available)
-                        prompt_lock = gr.Checkbox(
-                            label="Edit built prompt (lock auto-build)",
-                            value=False,
-                        )
-                        prompt_view = gr.Textbox(
-                            label="Built prompt",
-                            lines=2,
-                            max_lines=4,
-                            interactive=False,
-                        )
+                        with gr.Group(elem_classes=["xwave-built-prompt"]):
+                            with gr.Row():
+                                use_llm = gr.Checkbox(
+                                    label="LLM rewrite", value=False, scale=1,
+                                )
+                                prompt_lock = gr.Checkbox(
+                                    label="Edit built prompt (lock auto-build)",
+                                    value=False,
+                                    scale=1,
+                                )
+                            prompt_view = gr.Textbox(
+                                label="Built prompt",
+                                lines=2,
+                                max_lines=4,
+                                interactive=False,
+                            )
                         # Shown when LLM rewrite is on — the rewritten prompt, optionally editable
                         llm_prompt_lock = gr.Checkbox(
                             label="Edit LLM prompt (lock rewrite)",
@@ -837,12 +949,20 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             output_image,
             status,
             insp_prompt,
-            insp_iso,
+            iso_backdrop,
             insp_opacity,
             raw_view,
             prompt_view,
             llm_prompt_view,
             mute_prompt_btn,
+            cutout_chk,
+            obj_rotation,
+            bg_scale,
+            bg_rotation,
+            bg_offset_x,
+            bg_offset_y,
+            bg_flip_x,
+            bg_flip_y,
         ]
         settings_in = [denoise, out_steps, cfg, eta, use_llm, neg_prompt, out_seed]
 
@@ -927,19 +1047,81 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             session.add_empty_object()
             return pack(run_out=False)
 
-        def on_generate(prompt, iso, seed, cutout, den, steps, cfg_v, eta_v, llm, neg, oseed):
+        def on_generate(prompt, backdrop, seed, cutout, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             if not prompt or not str(prompt).strip():
                 session.status = "Type a prompt for the selected layer first."
                 return pack(run_out=False)
+            isolate = bool(cutout) and session.doc.selected_id not in (None, "__bg__")
+            session.layer_cutout = bool(cutout) if session.doc.selected_id not in (None, "__bg__") else session.layer_cutout
+            iso_text = _iso_prompt_for_backdrop(backdrop) if isolate else ""
             try:
                 session.generate_selected(
-                    str(prompt), str(iso or ""), seed=int(seed), isolate=bool(cutout)
+                    str(prompt), iso_text, seed=int(seed), isolate=isolate
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Generation failed")
                 session.status = f"Generation failed: {exc}"
                 return pack(run_out=False)
+            return pack(run_out=False, sync_out=True)
+
+        def on_cutout(checked):
+            session.set_layer_cutout(bool(checked))
+            if not session.layer_cutout:
+                return gr.update(visible=False, interactive=False), session.status
+            obj = session.doc.selected()
+            label = _iso_backdrop_label(obj.isolation_prompt if obj else ISO_WHITE)
+            if obj is not None and not (obj.isolation_prompt or "").strip():
+                session.set_isolation_backdrop(label)
+            return gr.update(value=label, visible=True, interactive=True), session.status
+
+        def on_iso_backdrop(label):
+            if session.doc.selected_id in (None, "__bg__") or not session.layer_cutout:
+                return session.status
+            session.set_isolation_backdrop(str(label or "White"))
+            return session.status
+
+        def on_obj_rotation(rotation, den, steps, cfg_v, eta_v, llm, neg, oseed):
+            apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
+            obj = session.doc.selected()
+            if obj is None:
+                return pack(run_out=False)
+            new_rot = float(rotation)
+            if abs(obj.transform.rotation - new_rot) < 1e-6:
+                return tuple(gr.update() for _ in pack_out)
+            session.update_transform_by_id(obj.id, rotation=new_rot)
+            return pack(run_out=False, sync_out=True)
+
+        def on_bg_transform(
+            scale, rotation, offset_x, offset_y, flip_x, flip_y,
+            den, steps, cfg_v, eta_v, llm, neg, oseed,
+        ):
+            apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
+            if session.doc.selected_id != "__bg__":
+                return pack(run_out=False)
+            new_scale = max(0.05, float(scale))
+            new_rot = float(rotation)
+            new_ox = float(offset_x)
+            new_oy = float(offset_y)
+            new_fx = bool(flip_x)
+            new_fy = bool(flip_y)
+            if (
+                abs(session.doc.bg_scale - new_scale) < 1e-6
+                and abs(session.doc.bg_rotation - new_rot) < 1e-6
+                and abs(session.doc.bg_offset_x - new_ox) < 1e-6
+                and abs(session.doc.bg_offset_y - new_oy) < 1e-6
+                and session.doc.bg_flip_x == new_fx
+                and session.doc.bg_flip_y == new_fy
+            ):
+                return tuple(gr.update() for _ in pack_out)
+            session.update_background_transform(
+                scale=new_scale,
+                rotation=new_rot,
+                offset_x=new_ox,
+                offset_y=new_oy,
+                flip_x=new_fx,
+                flip_y=new_fy,
+            )
             return pack(run_out=False, sync_out=True)
 
         def on_import(image, cutout, prompt, den, steps, cfg_v, eta_v, llm, neg, oseed):
@@ -1112,8 +1294,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
         def on_reset_xform(den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
-            if session.doc.selected_id in (None, "__bg__"):
-                session.status = "Select an object layer to reset."
+            if session.doc.selected_id is None:
+                session.status = "Select a layer to reset."
                 return pack(run_out=False)
             session.reset_selected_transform()
             return pack(run_out=True)
@@ -1331,14 +1513,44 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         )
         gen_btn.click(
             on_generate,
-            inputs=[insp_prompt, insp_iso, gen_seed, cutout_chk, *settings_in],
+            inputs=[insp_prompt, iso_backdrop, gen_seed, cutout_chk, *settings_in],
             outputs=pack_out,
         )
         insp_prompt.submit(
             on_generate,
-            inputs=[insp_prompt, insp_iso, gen_seed, cutout_chk, *settings_in],
+            inputs=[insp_prompt, iso_backdrop, gen_seed, cutout_chk, *settings_in],
             outputs=pack_out,
         )
+        cutout_chk.change(
+            on_cutout,
+            inputs=[cutout_chk],
+            outputs=[iso_backdrop, status],
+            show_progress="hidden",
+        )
+        iso_backdrop.change(
+            on_iso_backdrop,
+            inputs=[iso_backdrop],
+            outputs=[status],
+            show_progress="hidden",
+        )
+        obj_rotation.change(
+            on_obj_rotation,
+            inputs=[obj_rotation, *settings_in],
+            outputs=pack_out,
+            show_progress="hidden",
+        )
+        for bg_comp in (
+            bg_scale, bg_rotation, bg_offset_x, bg_offset_y, bg_flip_x, bg_flip_y,
+        ):
+            bg_comp.change(
+                on_bg_transform,
+                inputs=[
+                    bg_scale, bg_rotation, bg_offset_x, bg_offset_y,
+                    bg_flip_x, bg_flip_y, *settings_in,
+                ],
+                outputs=pack_out,
+                show_progress="hidden",
+            )
         insp_prompt.blur(
             on_prompt_edit, inputs=[insp_prompt], outputs=[layers_html], show_progress="hidden"
         )

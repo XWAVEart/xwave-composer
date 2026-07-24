@@ -57,14 +57,70 @@ def transform_object_layer(
     return canvas
 
 
+def transform_background(
+    background: Image.Image,
+    canvas_w: int,
+    canvas_h: int,
+    *,
+    scale: float = 1.0,
+    rotation: float = 0.0,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    flip_x: bool = False,
+    flip_y: bool = False,
+) -> Image.Image:
+    """Place a background image on a canvas-sized RGBA layer.
+
+    Scale 1.0 with no flip/rotation/offset matches the previous fill-to-canvas
+    stretch. Transform order matches the WORK canvas JS: scale, flip,
+    then rotate around center, then apply X/Y offset from center.
+    """
+    src = background.convert("RGBA")
+    if src.size != (canvas_w, canvas_h):
+        src = src.resize((canvas_w, canvas_h), Image.Resampling.LANCZOS)
+
+    s = max(0.05, float(scale))
+    new_w = max(1, int(round(canvas_w * s)))
+    new_h = max(1, int(round(canvas_h * s)))
+    if (new_w, new_h) != src.size:
+        src = src.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    if flip_x:
+        src = src.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    if flip_y:
+        src = src.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+
+    if abs(float(rotation)) > 1e-3:
+        src = src.rotate(
+            -float(rotation),
+            expand=True,
+            resample=Image.Resampling.BICUBIC,
+            fillcolor=(0, 0, 0, 0),
+        )
+
+    canvas = _blank_rgba(canvas_w, canvas_h)
+    left = int(round((canvas_w - src.width) / 2 + float(offset_x)))
+    top = int(round((canvas_h - src.height) / 2 + float(offset_y)))
+    canvas.paste(src, (left, top), src)
+    return canvas
+
+
 def compose_work_image(doc: "WorkDocument") -> Image.Image:
     """Flatten the document to an RGB image for display and OUTPUT init."""
     w, h = doc.width, doc.height
 
     if doc.background is not None:
-        bg = doc.background.convert("RGBA")
-        if bg.size != (w, h):
-            bg = bg.resize((w, h), Image.Resampling.LANCZOS)
+        bg = transform_background(
+            doc.background,
+            w,
+            h,
+            scale=doc.bg_scale,
+            rotation=doc.bg_rotation,
+            offset_x=doc.bg_offset_x,
+            offset_y=doc.bg_offset_y,
+            flip_x=doc.bg_flip_x,
+            flip_y=doc.bg_flip_y,
+        )
     else:
         bg = _blank_rgba(w, h)
 

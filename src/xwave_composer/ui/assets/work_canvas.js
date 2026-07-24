@@ -20,6 +20,12 @@
     canvasH: 1024,
     bgUrl: null,
     bgImg: null,
+    bgScale: 1,
+    bgRotation: 0,
+    bgOffsetX: 0,
+    bgOffsetY: 0,
+    bgFlipX: false,
+    bgFlipY: false,
     drag: null,
     viewScale: 1,
     lastSceneB64: "",
@@ -102,6 +108,12 @@
     state.selectedId = data.selected_id || null;
     state.bgUrl = data.bg_data_url || null;
     state.bgImg = state.bgUrl ? loadImage(state.bgUrl, state.bgImg) : null;
+    state.bgScale = data.bg_scale != null ? Number(data.bg_scale) : 1;
+    state.bgRotation = data.bg_rotation != null ? Number(data.bg_rotation) : 0;
+    state.bgOffsetX = data.bg_offset_x != null ? Number(data.bg_offset_x) : 0;
+    state.bgOffsetY = data.bg_offset_y != null ? Number(data.bg_offset_y) : 0;
+    state.bgFlipX = !!data.bg_flip_x;
+    state.bgFlipY = !!data.bg_flip_y;
 
     const prev = {};
     state.layers.forEach(function (l) {
@@ -173,7 +185,18 @@
     }
 
     if (state.bgImg && state.bgImg.complete && state.bgImg.naturalWidth) {
-      ctx.drawImage(state.bgImg, 0, 0, state.canvasW, state.canvasH);
+      const scale = Math.max(0.05, state.bgScale || 1);
+      const w = state.canvasW * scale;
+      const h = state.canvasH * scale;
+      ctx.save();
+      ctx.translate(
+        state.canvasW / 2 + (state.bgOffsetX || 0),
+        state.canvasH / 2 + (state.bgOffsetY || 0)
+      );
+      ctx.scale(state.bgFlipX ? -1 : 1, state.bgFlipY ? -1 : 1);
+      ctx.rotate(((state.bgRotation || 0) * Math.PI) / 180);
+      ctx.drawImage(state.bgImg, -w / 2, -h / 2, w, h);
+      ctx.restore();
     } else if (!state.bgUrl) {
       ctx.fillStyle = "rgba(229,231,235,0.28)";
       ctx.font = Math.round(30 / state.viewScale) + "px Inter, system-ui, sans-serif";
