@@ -77,6 +77,10 @@ isolation:
 # rewrites the prompt and transfers the image composition.
 llm:
   enabled_by_default: false
+  # Also drives the Improve loop (critique + better prompt).
+  # Measured: 3B produces a usable critique but an unreliable one -- on a clearly
+  # striped balloon it reported the stripes missing. If VRAM allows, the 7B is a
+  # markedly better critic; under mxfp8 there is usually room for it.
   model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
   max_new_tokens: 120
   min_new_tokens: 12
@@ -84,7 +88,13 @@ llm:
   # occasionally emitted EOS as the first token and produced an empty prompt.
   do_sample: false
   temperature: 0.0
-  keep_loaded: false
+  critique_max_new_tokens: 420
+  # Loading the model from disk dominates an Improve pass: measured 3m35s total
+  # with keep_loaded false, almost all of it the load. Under mxfp8 there is
+  # ~11 GB spare with Flux and SDXL resident, so keeping it costs headroom you
+  # are not otherwise using. Under bf16 the card is nearly full -- leave it off,
+  # and the loader will fall back to CPU when it cannot fit.
+  keep_loaded: true
 
 # --- Export upscaler (2x) ---
 # SeedVR2 runs in a short-lived subprocess after Flux/SDXL are unloaded. The
