@@ -39,6 +39,33 @@ python scripts/setup_seedvr2.py
 
 Edit `config.yaml` for model IDs, paths, and defaults.
 
+### Windows
+
+Verified working on Windows 11 with an RTX 5090. No source changes are needed; the
+differences are all in the environment.
+
+```powershell
+py -3.12 -m venv .venv                       # 3.13 is ahead of onnxruntime-gpu / rembg
+.venv\Scripts\python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m pip install -e .
+.venv\Scripts\python -m pip install triton-windows   # see below
+$env:HF_HOME = "D:\hf-cache"                 # the models want ~25 GB
+.venv\Scripts\python run.py --profile bf16
+```
+
+- **Triton.** Windows PyTorch ships without Triton, so `optimization.compile` silently
+  falls back to eager — the failure is caught and logged, not raised. `triton-windows`
+  restores real compilation.
+- **NVFP4 is Linux-only in practice.** The `mslk` wheel for `win_amd64` is
+  `py3-none-any`-style: 78 Python files and no compiled artifact, whose `__init__` loads a
+  hardcoded `mslk.so` that the wheel never ships. Use `bf16` or `mxfp8`.
+- **VRAM.** With Flux, SDXL and SAM2 all resident, `bf16` peaks around 31.5 GB of 32 GB.
+  It fits, but `mxfp8` is the sane working profile.
+- **First load is slow.** Compiling Flux and SDXL takes roughly 18 minutes on a cold start.
+  Later starts reuse the cache but only save about a minute of that, so if you restart
+  often, consider `optimization.compile: false`.
+
 ### Hugging Face access
 
 Some models (Flux family, SDXL base) may require a Hugging Face token and license acceptance:
@@ -64,6 +91,28 @@ python run.py
 
 Open on this machine: `http://127.0.0.1:7860`  
 Open on the LAN: `http://<this-host-ip>:7860`
+
+## Simple and advanced mode
+
+The app opens in **Simple** mode: a prompt, the two canvases, the layer tray, Improve,
+and export. The sampler knobs, quantization profiles, style presets, output-model picker,
+LoRA slots and SeedVR2 settings are hidden behind the **Advanced** toggle beside the title.
+The choice is remembered. Toggling is instant and client-side, so it never re-renders the
+canvas or interrupts what you are typing.
+
+Everything below describes the full set of controls, i.e. Advanced mode.
+
+## Keyboard and canvas
+
+| | |
+|---|---|
+| click an object | selects it — transparent pixels fall through to whatever is behind |
+| drag / corner handles / orange handle | move / stretch / rotate |
+| arrows, `Shift`+arrows | nudge 1px / 10px (a burst is one undo step) |
+| `Ctrl`+`Z`, `Ctrl`+`Shift`+`Z` | undo / redo, including undeleting a layer with its cutout |
+| `Delete` | remove the selected layer |
+
+Pointer events are used throughout, so pen and touch work the same as a mouse.
 
 ## Workflow
 
@@ -92,6 +141,50 @@ loads **Qwen2.5-VL-3B-Instruct** and sends it the concatenated prompt (style pre
 included) plus the current WORK canvas image. The model rewrites the prompt for SDXL and
 transfers only the image's composition (framing, camera angle, subject placement).
 
+## Improve loop
+
+Press **✧ Improve** and the vision model looks at what you just made, says what is wrong
+with it, and writes a better prompt. Optionally tell it what *you* think is wrong first —
+your notes outrank its own reading of the image. The proposed prompt lands in an editable
+box, so you can adjust the wording before pressing **Use this**.
+
+Two modes:
+
+- **Concept** (default) — judges the image against the original concept and rewrites the
+  whole prompt. The concept is captured on the first pass and stays the yardstick, so
+  repeated passes converge instead of drifting.
+- **Edit mode** — compares the WORK composite against the refined OUTPUT and rewrites the
+  *edit instructions* instead, so iterations refine the picture in front of you rather than
+  starting a new one. Tick it once the composition is roughly right.
+
+Earlier passes are fed back as context. The critic reuses the same Qwen2.5-VL weights as
+the LLM rewrite, so it costs no extra VRAM, and unloads afterwards unless `llm.keep_loaded`.
+
+## Command line
+
+The app exposes a control API on the same port as the UI, so a script or an agent can
+drive the same session a person is looking at. `xwave.py` needs nothing beyond the
+standard library.
+
+```bash
+python xwave.py load                                   # models into VRAM
+python xwave.py background "an empty misty lake at dawn"
+python xwave.py sticker    "a small wooden rowboat"    # prints the new layer id
+python xwave.py place --x 300 --y 700 --scale 0.4
+python xwave.py refine
+python xwave.py improve --notes "the boat is too small" --apply
+python xwave.py save out.png
+python xwave.py export                                 # 2x via SeedVR2
+
+# or the whole composition in one command
+python xwave.py compose "a misty lake at dawn" -s "a rowboat" -s "a heron"
+```
+
+`xwave.py state` prints what is on the canvas. Add `--json` to any command for the raw
+envelope. The routes themselves are under `/control` — `GET /control/state`,
+`POST /control/sticker`, `GET /control/render/output.png` and so on — and every mutating
+route returns the full state, so a caller never needs a follow-up request.
+
 ## Project layout
 
 ```
@@ -101,12 +194,14 @@ xwave-composer/
   run.py
   requirements.txt
   pyproject.toml
+  xwave.py                 # command-line client for a running instance
   src/xwave_composer/
     app.py                 # CLI entry (--preload loads models at startup)
     config.py
+    api/control.py         # HTTP control surface mounted on the Gradio app
     canvas/                # layers + compositor
     models/                # Flux, SDXL Hyper, SAM2/rembg, LLM, upscaler
-    pipeline/session.py    # session orchestration
+    pipeline/session.py    # session orchestration, history, improve loop
     style/                 # CSV preset loader + prompt build
     ui/gradio_app.py       # Gradio UI + WORK canvas JS
   workspace/               # runtime layer images
