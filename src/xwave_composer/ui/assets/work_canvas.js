@@ -582,11 +582,62 @@
     });
   }
 
+  // ── simple / advanced mode ───────────────────────────────────
+  // Purely client side: flipping an attribute on <body> lets CSS hide the
+  // advanced controls instantly. Doing it through Gradio visibility would
+  // re-render dozens of components and lose focus on every toggle.
+  const MODE_KEY = "xwave-mode";
+
+  function currentMode() {
+    return document.body.getAttribute("data-xwave-mode") || "simple";
+  }
+
+  function applyMode(mode) {
+    document.body.setAttribute("data-xwave-mode", mode);
+    try {
+      window.localStorage.setItem(MODE_KEY, mode);
+    } catch (e) {
+      /* private browsing — the mode just will not persist */
+    }
+    const btn = $("xwave-mode-toggle");
+    if (btn) {
+      const advanced = mode === "advanced";
+      btn.textContent = advanced ? "Simple" : "Advanced";
+      btn.setAttribute("aria-pressed", advanced ? "true" : "false");
+      btn.title = advanced
+        ? "Hide the technical controls"
+        : "Show sampler, style and export controls";
+    }
+    // Layout changed underneath the canvas, so its scale is stale.
+    draw();
+  }
+
+  function bindModeToggle() {
+    const btn = $("xwave-mode-toggle");
+    if (!btn || btn._xwaveBound) return;
+    btn._xwaveBound = true;
+    btn.addEventListener("click", function () {
+      applyMode(currentMode() === "advanced" ? "simple" : "advanced");
+    });
+    applyMode(currentMode());
+  }
+
+  function initMode() {
+    let saved = null;
+    try {
+      saved = window.localStorage.getItem(MODE_KEY);
+    } catch (e) {
+      /* ignore */
+    }
+    document.body.setAttribute("data-xwave-mode", saved === "advanced" ? "advanced" : "simple");
+  }
+
   // ── boot / DOM watching ──────────────────────────────────────
   function tick() {
     ingestFromDom(false);
     ensureCanvasBound();
     bindStackDelegation();
+    bindModeToggle();
   }
 
   function watchDom() {
@@ -609,10 +660,14 @@
   }
 
   function boot() {
+    // Set the mode before anything paints so the advanced controls never
+    // flash on screen for a frame before being hidden.
+    initMode();
     watchDom();
     ingestFromDom(true);
     ensureCanvasBound();
     bindStackDelegation();
+    bindModeToggle();
     draw();
   }
 

@@ -410,10 +410,15 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         )
         rev_state = gr.State(-1)
 
-        gr.Markdown(
-            '<p class="xwave-brand">XWAVE COMPOSER</p>',
-            elem_classes=["xwave-brand-wrap"],
-        )
+        with gr.Row(elem_classes=["xwave-brand-wrap"], equal_height=True):
+            gr.Markdown('<p class="xwave-brand">XWAVE COMPOSER</p>')
+            # Plain HTML rather than a gr.Button: the toggle is handled entirely
+            # in the browser, so it must not round-trip to Python at all.
+            gr.HTML(
+                '<button type="button" id="xwave-mode-toggle" '
+                'class="xwave-mode-toggle" aria-pressed="false">Advanced</button>',
+                padding=False,
+            )
 
         # ══ ROW 1 — top bars ═══════════════════════════════════════
         with gr.Row(elem_classes=["xwave-row", "xwave-topbar"], equal_height=True):
@@ -437,7 +442,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         elem_classes=["xwave-vram-block"],
                     )
                 active_profile = session.compute_profile
-                with gr.Row(elem_classes=["xwave-performance-buttons"]):
+                with gr.Row(elem_classes=["xwave-performance-buttons", "xwave-advanced"]):
                     bf16_btn = gr.Button(
                         "BF16",
                         size="sm",
@@ -453,7 +458,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         size="sm",
                         variant="primary" if active_profile == "nvfp4" else "secondary",
                     )
-            with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col"]):
+            with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col", "xwave-advanced"]):
                 with gr.Row(elem_classes=["xwave-bar-row", "xwave-knob-row"]):
                     cfg = gr.Number(
                         value=session.output_settings.cfg,
@@ -546,29 +551,39 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         cutout_chk = gr.Checkbox(
                             label="Cut out object (uncheck to place the full image)",
                             value=True,
+                            elem_classes=["xwave-advanced"],
                         )
                         with gr.Row():
                             gen_seed = gr.Number(
                                 value=-1, precision=0, show_label=False, container=False,
-                                scale=0, min_width=76, elem_classes=["xwave-seed"],
+                                scale=0, min_width=76,
+                                elem_classes=["xwave-seed", "xwave-advanced"],
                             )
                             gen_btn = gr.Button(
                                 "⟡ Generate", variant="primary", size="sm", scale=1, min_width=110
                             )
                         with gr.Row():
                             mute_prompt_btn = gr.Button(
-                                "Mute prompt", size="sm", scale=1, min_width=92
+                                "Mute prompt", size="sm", scale=1, min_width=92,
+                                elem_classes=["xwave-advanced"],
                             )
                             duplicate_btn = gr.Button(
                                 "Duplicate", size="sm", scale=1, min_width=82
                             )
                         with gr.Row():
-                            reset_xform_btn = gr.Button("Reset pose", size="sm", scale=1, min_width=88)
-                            reisolate_btn = gr.Button("Re-cut", size="sm", scale=1, min_width=72)
+                            reset_xform_btn = gr.Button(
+                                "Reset pose", size="sm", scale=1, min_width=88,
+                                elem_classes=["xwave-advanced"],
+                            )
+                            reisolate_btn = gr.Button(
+                                "Re-cut", size="sm", scale=1, min_width=72,
+                                elem_classes=["xwave-advanced"],
+                            )
                             delete_btn = gr.Button("Delete", size="sm", variant="stop", scale=1, min_width=72)
                         insp_opacity = gr.Slider(
                             0.0, 1.0, value=1.0, step=0.01, label="Opacity",
                             interactive=False,
+                            elem_classes=["xwave-advanced"],
                         )
                         raw_view = gr.Image(
                             label="Raw — click the subject to re-cut with SAM2",
@@ -579,24 +594,67 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             buttons=[],
                             elem_classes=["xwave-raw-view"],
                         )
-                        gr.Markdown('<p class="xwave-section-head">Import image</p>')
+                        gr.Markdown(
+                            '<p class="xwave-section-head">Import image</p>',
+                            elem_classes=["xwave-advanced"],
+                        )
                         import_img = gr.Image(
                             type="pil",
                             label="Drop or upload",
                             height=120,
                             buttons=[],
-                            elem_classes=["xwave-import"],
+                            elem_classes=["xwave-import", "xwave-advanced"],
                         )
                         import_cutout = gr.Radio(
                             choices=["rembg", "SAM2", "none"],
                             value="rembg",
                             label="Cutout",
-                            elem_classes=["xwave-import-cutout"],
+                            elem_classes=["xwave-import-cutout", "xwave-advanced"],
                         )
-                        import_btn = gr.Button("Import into layer", size="sm")
+                        import_btn = gr.Button(
+                            "Import into layer", size="sm", elem_classes=["xwave-advanced"]
+                        )
+
+                    # —— Improve: critique the picture, propose a better prompt ——
+                    with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
+                        gr.Markdown('<p class="xwave-section-head">Improve</p>')
+                        improve_notes = gr.Textbox(
+                            show_label=False,
+                            container=False,
+                            placeholder="What's wrong with it? (optional — it can also just look)",
+                            lines=2,
+                            max_lines=3,
+                        )
+                        improve_edit_chk = gr.Checkbox(
+                            label="Edit mode — refine this image instead of rewriting the prompt",
+                            value=False,
+                        )
+                        with gr.Row(elem_classes=["xwave-improve-row"]):
+                            improve_btn = gr.Button(
+                                "✧ Improve", variant="primary", size="sm", scale=1, min_width=110
+                            )
+                            improve_apply_btn = gr.Button(
+                                "Use this", size="sm", scale=1, min_width=88
+                            )
+                        improve_critique = gr.Textbox(
+                            label="Critique",
+                            value="",
+                            interactive=False,
+                            lines=5,
+                            max_lines=10,
+                            elem_classes=["xwave-critique"],
+                        )
+                        improve_prompt_view = gr.Textbox(
+                            label="Improved prompt (edit before using if you like)",
+                            value="",
+                            lines=3,
+                            max_lines=8,
+                        )
 
                     # —— Output style ——
-                    with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
+                    with gr.Column(
+                        scale=1, min_width=250, elem_classes=["xwave-panel", "xwave-advanced"]
+                    ):
                         gr.Markdown('<p class="xwave-section-head">Style</p>')
                         style_dd = gr.Dropdown(
                             choices=style_names,
@@ -675,8 +733,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
                     # —— Model + export ——
                     with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
-                        gr.Markdown('<p class="xwave-section-head">Output model</p>')
-                        with gr.Row():
+                        gr.Markdown(
+                            '<p class="xwave-section-head">Output model</p>',
+                            elem_classes=["xwave-advanced"],
+                        )
+                        with gr.Row(elem_classes=["xwave-advanced"]):
                             base_dd = gr.Dropdown(
                                 choices=base_names,
                                 value=base_names[0],
@@ -690,11 +751,13 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             container=False,
                             placeholder="…or HF repo id / CivitAI .safetensors link",
                             lines=1,
+                            elem_classes=["xwave-advanced"],
                         )
                         performance_dd = gr.Dropdown(
                             label="Performance",
                             choices=PROFILE_CHOICES,
                             value=profile_label(session.compute_profile),
+                            elem_classes=["xwave-advanced"],
                         )
                         performance_status = gr.Textbox(
                             label="Applied compute",
@@ -702,15 +765,20 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             interactive=False,
                             lines=2,
                             max_lines=3,
+                            elem_classes=["xwave-advanced"],
                         )
-                        with gr.Accordion("Style adapters (LoRA / TI)", open=False):
+                        with gr.Accordion(
+                            "Style adapters (LoRA / TI)",
+                            open=False,
+                            elem_classes=["xwave-advanced"],
+                        ):
                             lora_path = gr.Textbox(label="LoRA path or HF id", lines=1)
                             lora_scale = gr.Slider(0, 1.5, value=0.8, step=0.05, label="LoRA scale")
                             load_lora_btn = gr.Button("Load LoRA", size="sm")
                             emb_path = gr.Textbox(label="Textual inversion path or id", lines=1)
                             load_emb_btn = gr.Button("Load TI", size="sm")
                         gr.Markdown('<p class="xwave-section-head">Final output</p>')
-                        with gr.Row():
+                        with gr.Row(elem_classes=["xwave-advanced"]):
                             final_refine_strength = gr.Slider(
                                 0.05,
                                 0.95,
@@ -746,7 +814,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             refine_output_btn = gr.Button(
                                 "Refine OUTPUT", variant="secondary", size="sm",
                             )
-                        with gr.Accordion("SeedVR2 export settings", open=False):
+                        with gr.Accordion(
+                            "SeedVR2 export settings", open=False, elem_classes=["xwave-advanced"]
+                        ):
                             seedvr_model = gr.Dropdown(
                                 label="Model",
                                 choices=[
@@ -948,6 +1018,29 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             session.add_empty_object()
             return pack(run_out=False)
+
+        def on_improve(notes, edit_mode):
+            """Look at the current image and propose a better prompt."""
+            result = session.improve(user_notes=str(notes or ""), edit_mode=bool(edit_mode))
+            if result.ok:
+                return result.critique, result.improved_prompt, session.status
+            # A failed parse still usually carries a readable critique; show it
+            # rather than discarding work the model already did.
+            note = result.error or "Improve failed."
+            return (result.critique or note), gr.update(), note
+
+        def on_improve_apply(edited_prompt):
+            message = session.apply_improved(str(edited_prompt or ""))
+            selected = session.doc.selected()
+            layer_prompt = (
+                selected.prompt if selected is not None else gr.update()
+            )
+            built = (
+                session.output_settings.custom_prompt
+                if session.output_settings.prompt_locked
+                else gr.update()
+            )
+            return layer_prompt, built, message
 
         def on_generate(prompt, iso, seed, cutout, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1368,6 +1461,16 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             on_import,
             inputs=[import_img, import_cutout, insp_prompt, *settings_in],
             outputs=pack_out,
+        )
+        improve_btn.click(
+            on_improve,
+            inputs=[improve_notes, improve_edit_chk],
+            outputs=[improve_critique, improve_prompt_view, status],
+        )
+        improve_apply_btn.click(
+            on_improve_apply,
+            inputs=[improve_prompt_view],
+            outputs=[insp_prompt, prompt_view, status],
         )
         prompt_lock.input(
             on_prompt_lock,
