@@ -54,6 +54,12 @@ sdxl_hyper:
   keep_loaded: true
   # Debounce (seconds) before live OUTPUT refresh after transform.
   live_debounce_s: 0.10
+  # Live preview: releasing a drag renders at this fraction of the canvas with
+  # fewer steps so the OUTPUT keeps up, then settles to full quality ~1.2s after
+  # movement stops. Export and Refine always re-render at full size first, so a
+  # preview is never what gets saved.
+  preview_scale: 0.625
+  preview_steps: 4
 
 # --- Object isolation ---
 isolation:

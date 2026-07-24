@@ -73,6 +73,9 @@ class ComposerSession:
     last_work: Image.Image | None = None
     last_output: Image.Image | None = None
     last_output_prompt: str = ""
+    # True when last_output came from the fast low-resolution preview pass, so
+    # anything that ships a final image must re-render at full quality first.
+    output_is_preview: bool = False
     last_concat_prompt: str = ""
     _rewrite_cache_key: str = ""
     _rewrite_cache_result: str = ""
@@ -1114,8 +1117,16 @@ class ComposerSession:
 
         threading.Thread(target=_reload, daemon=True, name="flux-warm-reload").start()
 
-    def run_output(self, work_image: Image.Image | None = None) -> Image.Image:
-        """Run SDXL Hyper img2img on the WORK composition."""
+    def run_output(
+        self, work_image: Image.Image | None = None, *, preview: bool = False
+    ) -> Image.Image:
+        """Run SDXL Hyper img2img on the WORK composition.
+
+        ``preview`` trades resolution and steps for latency so the OUTPUT can
+        keep up with dragging. A full-quality pass follows once movement stops,
+        and anything that ships a final image re-renders first, so a preview is
+        never what gets exported.
+        """
         with self._lock:
             work = work_image or self.last_work or compose_work_image(self.doc)
             self.last_work = work
@@ -1133,18 +1144,37 @@ class ComposerSession:
             # Sticky seed: never leave OUTPUT to chance mid-session.
             if self.output_settings.seed < 0:
                 self.output_settings.seed = random.randint(0, 2_147_483_647)
-            self.status = "Refining OUTPUT with SDXL Hyper…"
+            init = work
+            steps = self.output_settings.steps
+            if preview:
+                scale = float(
+                    self.config.get("sdxl_hyper", "preview_scale", default=0.625)
+                )
+                steps = max(
+                    1, int(self.config.get("sdxl_hyper", "preview_steps", default=4))
+                )
+                # SDXL wants multiples of 8; round rather than let it silently pad.
+                pw = max(256, (int(work.width * scale) // 8) * 8)
+                ph = max(256, (int(work.height * scale) // 8) * 8)
+                if (pw, ph) != work.size:
+                    init = work.resize((pw, ph), Image.Resampling.BILINEAR)
+                self.status = "Previewing…"
+            else:
+                self.status = "Refining OUTPUT with SDXL Hyper…"
             try:
                 out = self.sdxl.refine(
-                    init_image=work,
+                    init_image=init,
                     prompt=prompt,
                     negative_prompt=self.output_settings.negative_prompt,
                     denoise=self.output_settings.denoise,
-                    steps=self.output_settings.steps,
+                    steps=steps,
                     seed=int(self.output_settings.seed),
                     guidance_scale=self.output_settings.cfg,
                     eta=self.output_settings.eta,
                 )
+                if preview and out.size != work.size:
+                    # Back to canvas size so the OUTPUT pane does not jump.
+                    out = out.resize(work.size, Image.Resampling.LANCZOS)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("OUTPUT refine failed")
                 self.status = f"OUTPUT failed: {exc}"
@@ -1156,15 +1186,25 @@ class ComposerSession:
                 self._schedule_flux_reload()
                 return self.last_output
             self.last_output = out
+            self.output_is_preview = preview
             self.output_rev += 1
-            self.status = "OUTPUT updated."
+            self.status = "Preview — settling…" if preview else "OUTPUT updated."
             self._schedule_flux_reload()
             return out
+
+    def ensure_full_output(self) -> Image.Image | None:
+        """Re-render at full quality if the current OUTPUT is only a preview."""
+        with self._lock:
+            if self.output_is_preview or self.last_output is None:
+                return self.run_output()
+            return self.last_output
 
     # ------------------------------------------------------------------- export
     def refine_final(self, steps: int, denoise: float) -> Image.Image:
         """Refine the current OUTPUT again without replacing the WORK source."""
         with self._lock:
+            # Never build a final image on top of a low-resolution preview.
+            self.ensure_full_output()
             if self.last_output is None:
                 self.run_output()
             source = self.last_output
@@ -1203,7 +1243,8 @@ class ComposerSession:
     ) -> tuple[Image.Image, Path]:
         """Upscale the currently accepted OUTPUT and save it."""
         with self._lock:
-            # Ensure we have a current OUTPUT
+            # Ensure we have a current OUTPUT, and never upscale a preview.
+            self.ensure_full_output()
             if self.last_output is None:
                 self.run_output()
             source = self.last_output or self.last_work or compose_work_image(self.doc)

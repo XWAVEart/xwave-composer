@@ -293,9 +293,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
     out_lock = threading.Lock()
     out_state: dict[str, Any] = {"token": 0, "running": False, "dirty": False}
 
-    def run_output_now() -> Image.Image:
+    def run_output_now(preview: bool = False) -> Image.Image:
         try:
-            return session.run_output(_work(session))
+            return session.run_output(_work(session), preview=preview)
         except Exception as exc:  # noqa: BLE001
             logger.exception("OUTPUT")
             session.status = f"OUTPUT error: {exc}"
@@ -339,7 +339,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def pack(run_out: bool = True, sync_out: bool = False) -> tuple:
+    def pack(run_out: bool = True, sync_out: bool = False, preview: bool = False) -> tuple:
         """-> work_html, layers_html, output, status,
         insp_prompt, insp_iso, insp_opacity, raw_view, prompt_view,
         llm_prompt_view, mute_prompt_btn"""
@@ -350,7 +350,10 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             with out_lock:
                 out_state["dirty"] = False
                 out_state["token"] += 1
-            out = run_output_now()
+            out = run_output_now(preview=preview)
+            if preview:
+                # Settle to full quality once the user stops moving things.
+                mark_output_dirty(delay_override=1.2)
         else:
             if run_out:
                 mark_output_dirty()
@@ -959,9 +962,10 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 # current tabs send false while dragging and true on release.
                 final = data.get("final")
                 if final is True:
-                    # Pointer-up triggers exactly one immediate SDXL pass and
-                    # returns its image in this callback.
-                    return pack(run_out=False, sync_out=True)
+                    # Pointer-up returns a fast low-resolution pass immediately,
+                    # so the OUTPUT tracks the drag; pack() then schedules the
+                    # full-quality render for when movement stops.
+                    return pack(run_out=False, sync_out=True, preview=True)
                 elif final is None:
                     # Legacy browser assets emit every 120 ms and do not label
                     # pointer-up. A longer debounce collapses the stream into
