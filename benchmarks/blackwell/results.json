@@ -1,0 +1,146 @@
+{
+  "capabilities": {
+    "cuda": true,
+    "device_name": "NVIDIA GeForce RTX 5090",
+    "capability": [
+      12,
+      0
+    ],
+    "blackwell": true,
+    "torchao": true,
+    "mslk": true
+  },
+  "torch": "2.13.0+cu130",
+  "cuda": "13.0",
+  "profiles": [
+    {
+      "profile": "bf16",
+      "flux": {
+        "load_seconds": 5.162257403018884,
+        "load_peak_allocated_gb": 14.92723560333252,
+        "optimization": {
+          "component": "flux",
+          "requested": "bf16",
+          "applied": "bf16",
+          "quantized_layers": 0,
+          "compiled": true,
+          "fallback_reason": ""
+        },
+        "cold_seconds": 3.2645615960936993,
+        "cold_peak_allocated_gb": 24.161261558532715,
+        "warm_seconds": 0.8683249599998817,
+        "warm_peak_allocated_gb": 17.346808433532715
+      },
+      "sdxl": {
+        "load_seconds": 3.249507714062929,
+        "load_peak_allocated_gb": 6.968129634857178,
+        "optimization": {
+          "component": "sdxl",
+          "requested": "bf16",
+          "applied": "bf16",
+          "quantized_layers": 0,
+          "compiled": true,
+          "fallback_reason": ""
+        },
+        "cold_seconds": 3.3005322359967977,
+        "cold_peak_allocated_gb": 16.482877731323242,
+        "warm_seconds": 0.40740538807585835,
+        "warm_peak_allocated_gb": 9.636019229888916
+      }
+    },
+    {
+      "profile": "mxfp8",
+      "flux": {
+        "load_seconds": 2.9729472409235314,
+        "load_peak_allocated_gb": 15.76762866973877,
+        "optimization": {
+          "component": "flux",
+          "requested": "mxfp8",
+          "applied": "mxfp8",
+          "quantized_layers": 103,
+          "compiled": true,
+          "fallback_reason": ""
+        },
+        "cold_seconds": 1.0732351150363684,
+        "cold_peak_allocated_gb": 13.906744956970215,
+        "warm_seconds": 0.5373130380176008,
+        "warm_peak_allocated_gb": 13.906744956970215
+      },
+      "sdxl": {
+        "load_seconds": 3.0065934180747718,
+        "load_peak_allocated_gb": 6.969675540924072,
+        "optimization": {
+          "component": "sdxl",
+          "requested": "mxfp8",
+          "applied": "fp8-weight-only",
+          "quantized_layers": 613,
+          "compiled": true,
+          "fallback_reason": ""
+        },
+        "cold_seconds": 1.2228850570973009,
+        "cold_peak_allocated_gb": 7.627955913543701,
+        "warm_seconds": 0.41106315795332193,
+        "warm_peak_allocated_gb": 7.626189708709717
+      },
+      "quality_vs_bf16": {
+        "flux": {
+          "mse": 0.00724658602848649,
+          "psnr_db": 21.398665476618703,
+          "lpips_alex": 0.0899771973490715
+        },
+        "sdxl": {
+          "mse": 0.00014716949954163283,
+          "psnr_db": 38.32182186963779,
+          "lpips_alex": 0.004667115863412619
+        }
+      }
+    },
+    {
+      "profile": "nvfp4",
+      "flux": {
+        "load_seconds": 3.28547324903775,
+        "load_peak_allocated_gb": 17.086295127868652,
+        "optimization": {
+          "component": "flux",
+          "requested": "nvfp4",
+          "applied": "nvfp4",
+          "quantized_layers": 103,
+          "compiled": true,
+          "fallback_reason": ""
+        },
+        "cold_seconds": 1.4817289030179381,
+        "cold_peak_allocated_gb": 12.23717737197876,
+        "warm_seconds": 0.4562538919271901,
+        "warm_peak_allocated_gb": 12.23717737197876
+      },
+      "sdxl": {
+        "load_seconds": 3.0404921689769253,
+        "load_peak_allocated_gb": 6.969675540924072,
+        "optimization": {
+          "component": "sdxl",
+          "requested": "nvfp4",
+          "applied": "fp8-weight-only",
+          "quantized_layers": 613,
+          "compiled": true,
+          "fallback_reason": ""
+        },
+        "cold_seconds": 0.41588574298657477,
+        "cold_peak_allocated_gb": 7.627955913543701,
+        "warm_seconds": 0.4121315950760618,
+        "warm_peak_allocated_gb": 7.626189708709717
+      },
+      "quality_vs_bf16": {
+        "flux": {
+          "mse": 0.02618260122835636,
+          "psnr_db": 15.819872087019185,
+          "lpips_alex": 0.25125759840011597
+        },
+        "sdxl": {
+          "mse": 0.00014716949954163283,
+          "psnr_db": 38.32182186963779,
+          "lpips_alex": 0.004667115863412619
+        }
+      }
+    }
+  ]
+}

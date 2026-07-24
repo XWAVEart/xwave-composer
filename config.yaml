@@ -1,0 +1,124 @@
+# xwave-composer configuration
+# Paths may be Hugging Face repo IDs or local directories.
+
+device: "cuda"
+dtype: "bfloat16"   # bfloat16 recommended on RTX 5090
+
+# --- RTX 5090 / Blackwell compute profile ---
+optimization:
+  # bf16 | mxfp8 | nvfp4
+  # MXFP8 is the quality-focused default. NVFP4 saves more Flux VRAM but can
+  # produce a larger visual delta from BF16.
+  profile: "mxfp8"
+  compile: true
+  # CUDA-graph modes currently overwrite reused FLUX.2 block outputs.
+  compile_mode: "default"
+  compile_fullgraph: true
+  min_linear_features: 1024
+  use_mslk_kernel: true
+  allow_tf32: true
+  cudnn_benchmark: true
+
+# Canvas defaults
+canvas:
+  width: 1024
+  height: 1024
+
+# --- Layer generation: Flux 2 klein (Apache 2.0) ---
+# Note: FLUX.2-klein-4B is Apache 2.0. FLUX.2-klein-9B is non-commercial — avoid for commercial use.
+flux:
+  # Primary model id (Apache 2.0). Override with a local path after download.
+  model_id: "black-forest-labs/FLUX.2-klein-4B"
+  # Fallback if the primary id is unavailable.
+  fallback_model_id: "black-forest-labs/FLUX.2-klein-base-4B"
+  steps: 4
+  guidance_scale: 1.0
+  max_sequence_length: 512
+  # Keep model loaded between generations (uses VRAM).
+  keep_loaded: true
+
+# --- OUTPUT stage: SDXL Hyper / Hyper-SDXL img2img ---
+sdxl_hyper:
+  # Default base. The UI base-model menu can swap this at runtime
+  # (DreamShaper XL, Juggernaut XL, epiCRealism XL, RealVisXL V5, or any
+  # HF repo id / CivitAI .safetensors download link).
+  base_model_id: "stabilityai/stable-diffusion-xl-base-1.0"
+  # ByteDance Hyper-SD LoRA for few-step SDXL (1–8 steps typical).
+  hyper_lora_id: "ByteDance/Hyper-SD"
+  hyper_lora_weight_name: "Hyper-SDXL-8steps-lora.safetensors"
+  # Alternative single-file / UNet checkpoints can be set here.
+  unet_id: null
+  default_denoise: 0.3
+  default_steps: 6
+  guidance_scale: 1.0
+  keep_loaded: true
+  # Debounce (seconds) before live OUTPUT refresh after transform.
+  live_debounce_s: 0.10
+
+# --- Object isolation ---
+isolation:
+  preferred: "sam2"   # sam2 | rembg
+  sam2:
+    # transformers-compatible SAM 2.1 weights
+    model_id: "facebook/sam2.1-hiera-large"
+    checkpoint: null  # optional local .pt path for the official sam2 package
+  rembg:
+    model: "u2net"
+
+# --- Optional prompt rewrite LLM (vision) ---
+# Default OUTPUT prompt is the plain concatenation; enabling "LLM rewrite"
+# in the UI sends the concatenated prompt + WORK image to this model, which
+# rewrites the prompt and transfers the image composition.
+llm:
+  enabled_by_default: false
+  model_id: "Qwen/Qwen2.5-VL-3B-Instruct"
+  max_new_tokens: 120
+  min_new_tokens: 12
+  # Greedy generation is reliable for this constrained rewrite task. Sampling
+  # occasionally emitted EOS as the first token and produced an empty prompt.
+  do_sample: false
+  temperature: 0.0
+  keep_loaded: false
+
+# --- Export upscaler (2x) ---
+# SeedVR2 runs in a short-lived subprocess after Flux/SDXL are unloaded. The
+# subprocess exits after saving, so SeedVR2 never consumes VRAM while editing.
+export:
+  upscaler: "seedvr2"   # seedvr2 | realesrgan | bicubic
+  allow_fallback: false  # fail visibly rather than silently exporting Lanczos
+  seedvr2_runtime_dir: "models/seedvr2-runtime"
+  seedvr2_weights_dir: "models/seedvr2-runtime/weights"
+  # Final export gets exclusive VRAM, so use the full-quality 7B FP16 model.
+  seedvr2_model: "seedvr2_ema_7b_fp16.safetensors"
+  seedvr2_seed: 42
+  seedvr2_color_correction: "lab"
+  seedvr2_input_noise_scale: 0.0
+  seedvr2_latent_noise_scale: 0.0
+  seedvr2_attention: "sdpa"
+  seedvr2_tile_size: 1024
+  seedvr2_timeout_s: 1800
+  factor: 2
+  jpeg_quality: 95
+  default_refine_strength: 0.3
+  default_refine_steps: 8
+  output_dir: "exports"
+
+# --- Style assets ---
+style:
+  # CSV spreadsheet of style presets (name, cfg, denoise, eta, prefix, suffix, negative)
+  presets_file: "XWAVE-COMPOSER-STYLES.csv"
+  lora_dir: "models/loras"
+  embedding_dir: "models/embeddings"
+
+# --- Paths ---
+paths:
+  models_cache: "models"
+  layers_dir: "workspace/layers"
+  workspace_dir: "workspace"
+
+# Gradio server
+server:
+  host: "0.0.0.0"
+  port: 7860
+  share: false
+  show_error: true

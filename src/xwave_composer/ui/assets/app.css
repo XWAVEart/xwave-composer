@@ -1,0 +1,553 @@
+/* xwave-composer — dark studio theme, dense dual-canvas workspace */
+
+:root {
+  --xw-bg: #0a0c0f;
+  --xw-panel: #12151a;
+  --xw-panel-2: #171b21;
+  --xw-border: #232830;
+  --xw-border-soft: #1c2128;
+  --xw-text: #e6e9ee;
+  --xw-text-dim: #828a98;
+  --xw-accent: #5eead4;
+  --xw-accent-dim: rgba(94, 234, 212, 0.14);
+  --xw-danger: #f87171;
+  --xw-radius: 8px;
+  --xw-radius-sm: 5px;
+  --xw-font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --xw-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ── page chrome ── */
+body,
+.gradio-container {
+  background: var(--xw-bg) !important;
+  color: var(--xw-text) !important;
+  font-family: var(--xw-font) !important;
+}
+
+.gradio-container {
+  max-width: 1680px !important;
+  margin: 0 auto !important;
+  padding: 8px 12px 14px !important;
+}
+
+.gradio-container footer,
+footer {
+  display: none !important;
+}
+
+/* JS→Python bridge textbox: present in DOM, invisible to the user */
+#xwave-action-out,
+.xwave-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* ── flatten Gradio's nested block chrome ── */
+.xwave-app .block,
+.xwave-app .form,
+.xwave-app .styler,
+.xwave-app .gr-group {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.xwave-row {
+  gap: 10px !important;
+  margin: 0 0 8px !important;
+  align-items: stretch !important;
+}
+
+.xwave-col {
+  min-width: 0 !important;
+  gap: 6px !important;
+}
+
+/* labels */
+.xwave-app label span,
+.xwave-app .label-wrap span {
+  font-size: 0.7rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em;
+  color: var(--xw-text-dim) !important;
+}
+
+.xwave-app input,
+.xwave-app textarea,
+.xwave-app select {
+  background: var(--xw-panel-2) !important;
+  border: 1px solid var(--xw-border) !important;
+  color: var(--xw-text) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  font-size: 0.82rem !important;
+}
+
+.xwave-app input:focus,
+.xwave-app textarea:focus {
+  border-color: var(--xw-accent) !important;
+  box-shadow: 0 0 0 1px var(--xw-accent-dim) !important;
+}
+
+/* buttons */
+.xwave-app button {
+  border-radius: var(--xw-radius-sm) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em;
+  border: 1px solid var(--xw-border) !important;
+  background: var(--xw-panel-2) !important;
+  color: var(--xw-text) !important;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.xwave-app button:hover {
+  border-color: var(--xw-accent) !important;
+}
+
+.xwave-app button.primary {
+  background: var(--xw-accent) !important;
+  border-color: var(--xw-accent) !important;
+  color: #06201b !important;
+}
+
+.xwave-app button.primary:hover {
+  filter: brightness(1.08);
+}
+
+.xwave-app button.stop {
+  background: transparent !important;
+  border-color: rgba(248, 113, 113, 0.4) !important;
+  color: var(--xw-danger) !important;
+}
+
+.xwave-app button.stop:hover {
+  background: rgba(248, 113, 113, 0.12) !important;
+  border-color: var(--xw-danger) !important;
+}
+
+/* brand title */
+.xwave-brand-wrap {
+  margin: 0 0 6px !important;
+  padding: 0 !important;
+}
+
+.xwave-brand {
+  margin: 2px 0 8px !important;
+  font-size: 1.15rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.42em !important;
+  text-indent: 0.42em !important;
+  text-align: center !important;
+  text-transform: uppercase !important;
+  color: var(--xw-text) !important;
+  opacity: 0.92;
+}
+
+.xwave-import {
+  min-height: 100px !important;
+}
+
+.xwave-import-cutout {
+  margin-top: -2px !important;
+}
+.xwave-topbar {
+  margin-bottom: 8px !important;
+}
+
+.xwave-topbar > .column {
+  background: var(--xw-panel) !important;
+  border: 1px solid var(--xw-border-soft) !important;
+  border-radius: var(--xw-radius) !important;
+  padding: 6px 10px !important;
+  justify-content: center !important;
+}
+
+.xwave-bar-row {
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+/* VRAM meter */
+.xwave-vram-block {
+  flex: 0 0 auto !important;
+  min-width: 110px !important;
+}
+
+.xwave-vram {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+}
+
+.xwave-vram-bar {
+  width: 56px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--xw-border-soft);
+  overflow: hidden;
+}
+
+.xwave-vram-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+
+.xwave-vram-fill.is-ok {
+  background: var(--xw-accent);
+}
+
+.xwave-vram-fill.is-warn {
+  background: #f59e0b;
+}
+
+.xwave-vram-fill.is-hot {
+  background: var(--xw-danger);
+}
+
+.xwave-vram-label {
+  font-family: var(--xw-mono);
+  font-size: 0.62rem;
+  color: var(--xw-text-dim);
+  white-space: nowrap;
+}
+
+.xwave-status input,
+.xwave-status textarea {
+  font-family: var(--xw-mono) !important;
+  font-size: 0.68rem !important;
+  color: var(--xw-text-dim) !important;
+  background: rgba(0, 0, 0, 0.25) !important;
+  border: 1px solid var(--xw-border-soft) !important;
+}
+
+/* ── canvases: flush top, perfectly side by side ── */
+.xwave-canvases {
+  align-items: flex-start !important;
+}
+
+.xwave-canvas-frame {
+  background: #0e1013 !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius) !important;
+  overflow: hidden;
+  line-height: 0;
+  min-height: 300px;
+  padding: 0 !important;
+}
+
+#xwave-work-root {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+}
+
+#xwave-work-canvas {
+  display: block;
+  width: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+#xwave-work-canvas:active {
+  cursor: grabbing;
+}
+
+/* OUTPUT image fills its frame edge to edge */
+.xwave-out-img {
+  background: #0e1013 !important;
+  border: none !important;
+  min-height: 300px;
+}
+
+.xwave-out-img .image-container,
+.xwave-out-img img {
+  background: #0e1013 !important;
+  object-fit: contain !important;
+  border-radius: 0 !important;
+}
+
+.xwave-out-img [data-testid="image"] {
+  border: none !important;
+}
+
+/* knob strip in the top bar, above the OUTPUT canvas */
+.xwave-knob-row {
+  align-items: flex-end !important;
+  gap: 6px 8px !important;
+  margin: 0 !important;
+  flex-wrap: wrap !important;
+  overflow: visible !important;
+}
+
+.xwave-export-btn {
+  align-self: flex-end !important;
+  margin-bottom: 1px !important;
+}
+
+.xwave-knob {
+  overflow: visible !important;
+}
+
+.xwave-topbar .form,
+.xwave-knob-row .form {
+  overflow: visible !important;
+}
+
+.xwave-knob .wrap {
+  gap: 1px !important;
+}
+
+.xwave-knob input[type="number"] {
+  padding: 3px 6px !important;
+  font-size: 0.76rem !important;
+  font-family: var(--xw-mono) !important;
+  min-width: 52px !important;
+}
+
+/* spinner arrows steal width from the value on compact knobs */
+.xwave-knob input[type="number"]::-webkit-outer-spin-button,
+.xwave-knob input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+
+.xwave-knob input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* hide reset ↺ buttons and shrink min/max labels on the knob strip */
+.xwave-knob-row button[title*="Reset"],
+.xwave-knob-row .reset-button {
+  display: none !important;
+}
+
+.xwave-knob .slider_input_container span,
+.xwave-knob .min_value,
+.xwave-knob .max_value {
+  font-size: 0.58rem !important;
+  opacity: 0.5;
+}
+
+/* ── bottom: layers | panels ── */
+.xwave-bottom {
+  margin-top: 0 !important;
+}
+
+.xwave-section-head {
+  font-size: 0.64rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.14em !important;
+  text-transform: uppercase !important;
+  color: var(--xw-text-dim) !important;
+  margin: 0 0 4px 1px !important;
+}
+
+.xwave-layers-head {
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 6px !important;
+  margin: 0 !important;
+}
+
+.xwave-add-btn {
+  font-size: 0.72rem !important;
+  padding: 2px 10px !important;
+  min-height: 24px !important;
+}
+
+/* layer stack */
+#xwave-layers-root {
+  width: 100%;
+}
+
+#xwave-layer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.xwave-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  background: var(--xw-panel);
+  border: 1px solid var(--xw-border-soft);
+  border-radius: var(--xw-radius-sm);
+  cursor: pointer;
+  color: var(--xw-text);
+  user-select: none;
+  transition: border-color 0.1s ease, background 0.1s ease;
+  line-height: 1.3;
+}
+
+.xwave-card:hover {
+  background: var(--xw-panel-2);
+  border-color: var(--xw-border);
+}
+
+.xwave-card.is-selected {
+  border-color: var(--xw-accent);
+  background: var(--xw-accent-dim);
+}
+
+.xwave-card.is-muted {
+  opacity: 0.55;
+}
+
+.xwave-card.is-muted .xwave-card-text {
+  font-style: italic;
+  color: var(--xw-muted, #9aa3ad);
+}
+
+.xwave-card.is-dragging {
+  opacity: 0.4;
+}
+
+.xwave-card.is-over {
+  border-color: #f59e0b;
+}
+
+.xwave-thumb {
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  background: #0c0e11 center / cover no-repeat;
+  border: 1px solid var(--xw-border-soft);
+  flex-shrink: 0;
+}
+
+.xwave-card-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.72rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.xwave-card.is-empty .xwave-card-text {
+  color: var(--xw-text-dim);
+  font-style: italic;
+}
+
+.xwave-bg-tag {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--xw-text-dim);
+  border: 1px solid var(--xw-border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  flex-shrink: 0;
+}
+
+.xwave-del {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--xw-text-dim);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.xwave-del:hover {
+  color: var(--xw-danger);
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+/* property panels: one soft panel per column, no nested borders */
+.xwave-props-grid {
+  gap: 10px !important;
+  align-items: stretch !important;
+}
+
+.xwave-panel {
+  background: var(--xw-panel) !important;
+  border: 1px solid var(--xw-border-soft) !important;
+  border-radius: var(--xw-radius) !important;
+  padding: 8px 10px 10px !important;
+  gap: 6px !important;
+}
+
+.xwave-seed input {
+  font-family: var(--xw-mono) !important;
+  font-size: 0.74rem !important;
+  text-align: center;
+}
+
+.xwave-raw-view {
+  border: 1px dashed var(--xw-border) !important;
+  border-radius: var(--xw-radius-sm) !important;
+}
+
+.xwave-raw-view img {
+  cursor: crosshair !important;
+}
+
+/* accordion */
+.xwave-app .accordion,
+.xwave-app .label-wrap {
+  background: transparent !important;
+}
+
+/* sliders */
+.xwave-app input[type="range"] {
+  accent-color: var(--xw-accent) !important;
+  margin: 0 !important;
+}
+
+/* scrollbars */
+.xwave-app ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.xwave-app ::-webkit-scrollbar-thumb {
+  background: var(--xw-border);
+  border-radius: 4px;
+}
+
+.xwave-app ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* dropdown menus */
+.xwave-app ul.options {
+  background: var(--xw-panel-2) !important;
+  border: 1px solid var(--xw-border) !important;
+}
+
+.xwave-app ul.options li:hover,
+.xwave-app ul.options li.selected {
+  background: var(--xw-accent-dim) !important;
+}
+
+/* progress + toasts stay subtle */
+.xwave-app .progress-text,
+.xwave-app .eta-bar {
+  color: var(--xw-text-dim) !important;
+}

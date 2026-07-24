@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xwave-composer"
+version = "0.1.0"
+description = "Multi-layer AI image composition: Flux 2 klein layers + SDXL Hyper OUTPUT"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "xwave" }]
+dependencies = [
+  "torch>=2.4.0",
+  "torchvision>=0.19.0",
+  "torchaudio>=2.4.0",
+  "diffusers>=0.32.0",
+  "transformers>=4.46.0",
+  "accelerate>=1.0.0",
+  "safetensors>=0.4.0",
+  "sentencepiece>=0.2.0",
+  "protobuf>=4.25.0",
+  "huggingface-hub>=0.26.0",
+  "gradio>=5.0.0",
+  "Pillow>=10.0.0",
+  "numpy>=1.26.0",
+  "opencv-python-headless>=4.9.0",
+  "rembg[gpu]>=2.0.50",
+  "onnxruntime-gpu>=1.18.0",
+  "pyyaml>=6.0",
+  "einops>=0.8.0",
+  "peft>=0.13.0",
+  "scipy>=1.11.0",
+  "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6.0"]
+blackwell = ["torchao>=0.17.0"]
+seedvr2 = [
+  "omegaconf>=2.3.0",
+  "rotary-embedding-torch>=0.5.3",
+  "gguf>=0.19.0",
+  "matplotlib>=3.8.0",
+]
+# Optional: install sam2 from Meta if available
+sam2 = []
+
+[project.scripts]
+xwave-composer = "xwave_composer.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+xwave_composer = ["ui/assets/*", "data/*"]

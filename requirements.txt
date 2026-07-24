@@ -1,0 +1,38 @@
+# Multi-layer AI Image Composition
+# Target: NVIDIA RTX 5090 (CUDA). Install PyTorch first for your CUDA version.
+#
+# Recommended install:
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install --upgrade pip
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+#   pip install --pre mslk --index-url https://download.pytorch.org/whl/nightly/cu130
+#   pip install -r requirements.txt
+#   pip install -e .
+
+torch>=2.4.0
+torchao>=0.17.0
+torchvision>=0.19.0
+torchaudio>=2.4.0
+diffusers>=0.32.0
+transformers>=4.46.0
+accelerate>=1.0.0
+safetensors>=0.4.0
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+huggingface-hub>=0.26.0
+gradio>=5.0.0
+Pillow>=10.0.0
+numpy>=1.26.0
+opencv-python-headless>=4.9.0
+rembg[gpu]>=2.0.50
+onnxruntime-gpu>=1.18.0
+pyyaml>=6.0
+einops>=0.8.0
+peft>=0.13.0
+scipy>=1.11.0
+tqdm>=4.66.0
+# Export-only SeedVR2 CLI runtime (installed by scripts/setup_seedvr2.py)
+omegaconf>=2.3.0
+rotary-embedding-torch>=0.5.3
+gguf>=0.19.0
+matplotlib>=3.8.0
