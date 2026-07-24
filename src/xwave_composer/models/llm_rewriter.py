@@ -11,8 +11,10 @@ unless keep_loaded is set.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -47,6 +49,95 @@ SYSTEM_PROMPT = (
     "- Make the prompt natural and effective for SDXL.\n"
     "- Output only the final rewritten prompt. Nothing else."
 )
+
+
+CRITIQUE_SYSTEM = (
+    "You are an expert visual art critic and prompt engineer.\n"
+    "You look at a generated image, judge it against the ORIGINAL CONCEPT, and return "
+    "two things: a short critique of what did not work, and an improved prompt that "
+    "fixes it without drifting from the concept.\n"
+    "Process:\n"
+    "1. The ORIGINAL CONCEPT is the source of truth. The prompt may have drifted; judge "
+    "against the concept, not the prompt.\n"
+    "2. Look for missing elements, wrong style, bad lighting or colour, weak composition, "
+    "anatomy or perspective errors, and anything that contradicts the concept.\n"
+    "3. Name the 3 to 5 biggest problems, briefly and concretely.\n"
+    "4. Rewrite the prompt to stay true to the concept, be far more specific where the "
+    "image failed, strengthen wording for what came out weak, and keep what worked.\n"
+    "Return ONLY a JSON object, no markdown fence and no preamble:\n"
+    '{"critique": "...", "improved_prompt": "..."}'
+)
+
+CRITIQUE_EDIT_SYSTEM = (
+    "You are a senior art director reviewing an IMAGE EDIT.\n"
+    "You get two images: the ORIGINAL first, then the RESULT after the edit.\n"
+    "Judge whether the edit achieved the intent.\n"
+    "Process:\n"
+    "1. Did it preserve what should have been preserved?\n"
+    "2. Did it change what was meant to change?\n"
+    "3. Is the result a recognisable evolution of the original, not a replacement?\n"
+    "4. Look for over-editing, under-editing, misread instructions, lost original "
+    "elements, and badly blended additions.\n"
+    "5. Name the 3 to 5 biggest problems with the EDIT specifically, not with general "
+    "image quality.\n"
+    "6. Rewrite the edit instructions to be more specific about what to change, more "
+    "explicit about what to preserve, and to warn against what went wrong this time.\n"
+    "Return ONLY a JSON object, no markdown fence and no preamble:\n"
+    '{"critique": "...", "improved_prompt": "..."}'
+)
+
+
+@dataclass
+class ImproveIteration:
+    """One pass of the improve loop, kept as context for the next pass."""
+
+    n: int
+    critique: str
+    improved_prompt: str
+    user_notes: str = ""
+
+
+@dataclass
+class ImproveResult:
+    ok: bool
+    critique: str = ""
+    improved_prompt: str = ""
+    error: str = ""
+    raw: str = field(default="", repr=False)
+
+
+def _parse_critique_json(text: str) -> tuple[str, str] | None:
+    """Pull (critique, improved_prompt) out of a model response.
+
+    A 3B model does not reliably honour "JSON only", so accept a fenced block
+    or an object embedded in prose before giving up.
+    """
+    candidate = text.strip()
+    fence = re.search(r"```(?:json)?\s*(.+?)\s*```", candidate, re.DOTALL)
+    if fence:
+        candidate = fence.group(1).strip()
+    attempts = [candidate]
+    brace = re.search(r"\{.*\}", candidate, re.DOTALL)
+    if brace:
+        attempts.append(brace.group(0))
+    for attempt in attempts:
+        try:
+            data = json.loads(attempt)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        critique = data.get("critique") or data.get("Critique")
+        improved = (
+            data.get("improved_prompt")
+            or data.get("improvedPrompt")
+            or data.get("improved")
+        )
+        if isinstance(critique, list):
+            critique = "\n".join(str(item) for item in critique)
+        if critique and improved:
+            return str(critique).strip(), str(improved).strip()
+    return None
 
 
 class PromptRewriter:
@@ -282,6 +373,152 @@ class PromptRewriter:
             restored = f"{style_prefix.strip()} {result.strip()}".strip()
             return restored[:420].strip(" ,")
         return text
+
+    def critique(
+        self,
+        *,
+        original_concept: str,
+        current_prompt: str,
+        result_image: Image.Image,
+        base_image: Image.Image | None = None,
+        user_notes: str = "",
+        history: list[ImproveIteration] | None = None,
+        edit_mode: bool = False,
+    ) -> ImproveResult:
+        """Judge a generated image and return a critique plus a better prompt.
+
+        In edit mode the model sees the image before the edit followed by the
+        result, and rewrites the edit instructions rather than the whole prompt,
+        so an iteration refines the picture instead of regenerating a new one.
+
+        The loop shape (visible critique, optional user notes, accumulated
+        iterations, and a mode switch between whole-prompt and edit) follows the
+        operator's art-generator workflow in listeningrooms-vibesmithing.
+        """
+        if edit_mode and base_image is None:
+            return ImproveResult(ok=False, error="Edit mode needs the pre-edit image.")
+
+        try:
+            self.ensure_loaded()
+        except Exception as exc:  # noqa: BLE001 - surface load failures to the caller
+            return ImproveResult(ok=False, error=f"LLM load failed: {exc}")
+        assert self.model is not None and self.processor is not None
+
+        def _small(img: Image.Image) -> Image.Image:
+            # Two images double the vision token cost; keep the budget sane.
+            out = img.convert("RGB")
+            out.thumbnail((512, 512), Image.Resampling.BILINEAR)
+            return out
+
+        images: list[Image.Image] = []
+        parts: list[dict[str, Any]] = []
+        if edit_mode and base_image is not None:
+            images.append(_small(base_image))
+            parts.append({"type": "image"})
+        images.append(_small(result_image))
+        parts.append({"type": "image"})
+
+        sections = [
+            f"ORIGINAL CONCEPT:\n{original_concept.strip() or '(none given)'}",
+            f"CURRENT {'EDIT INSTRUCTIONS' if edit_mode else 'PROMPT'}:\n"
+            f"{current_prompt.strip() or '(none)'}",
+        ]
+        if user_notes.strip():
+            # User notes outrank the model's own read of the image.
+            sections.append(
+                "WHAT THE USER SAYS IS WRONG (address these specifically):\n"
+                f"{user_notes.strip()}"
+            )
+        for it in history or []:
+            sections.append(
+                f"EARLIER PASS {it.n}:\ncritique: {it.critique[:300]}\n"
+                f"produced: {it.improved_prompt[:200]}"
+            )
+        if edit_mode:
+            sections.append(
+                "The first image is the ORIGINAL, the second is the RESULT of the edit. "
+                "Critique the edit and return improved edit instructions."
+            )
+        else:
+            sections.append(
+                "Critique the attached image against the concept and return an "
+                "improved prompt."
+            )
+
+        messages = [
+            {"role": "system", "content": CRITIQUE_EDIT_SYSTEM if edit_mode else CRITIQUE_SYSTEM},
+            {"role": "user", "content": parts + [{"type": "text", "text": "\n\n".join(sections)}]},
+        ]
+
+        max_new = int(self.config.get("llm", "critique_max_new_tokens", default=420))
+        raw = ""
+        for attempt in range(2):
+            chat = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            inputs = self.processor(text=[chat], images=images, return_tensors="pt", padding=True)
+            device = next(self.model.parameters()).device
+            inputs = {
+                key: value.to(device) if hasattr(value, "to") else value
+                for key, value in inputs.items()
+            }
+            prompt_length = int(inputs["input_ids"].shape[-1])
+            try:
+                with torch.inference_mode():
+                    out = self.model.generate(
+                        **inputs,
+                        max_new_tokens=max_new,
+                        do_sample=False,
+                    )
+            except torch.OutOfMemoryError:
+                if str(self._runtime_device or "").startswith("cuda"):
+                    logger.warning("Critique OOM on GPU — reloading the LLM on CPU")
+                    self.unload()
+                    self.load(force=True, prefer_device="cpu")
+                    return self.critique(
+                        original_concept=original_concept,
+                        current_prompt=current_prompt,
+                        result_image=result_image,
+                        base_image=base_image,
+                        user_notes=user_notes,
+                        history=history,
+                        edit_mode=edit_mode,
+                    )
+                return ImproveResult(ok=False, error="Out of memory during critique.")
+
+            raw = self.processor.decode(out[0, prompt_length:], skip_special_tokens=True).strip()
+            parsed = _parse_critique_json(raw)
+            if parsed is not None:
+                critique, improved = parsed
+                return ImproveResult(
+                    ok=True, critique=critique, improved_prompt=improved, raw=raw
+                )
+            if attempt == 0:
+                # Nudge once, then accept a plain-text fallback rather than failing.
+                messages.append({"role": "assistant", "content": raw[:400]})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "That was not valid JSON. Reply with ONLY this, filled in:\n"
+                                    '{"critique": "...", "improved_prompt": "..."}'
+                                ),
+                            }
+                        ],
+                    }
+                )
+
+        # Both attempts missed the format. The text is usually still useful, so
+        # hand it back as the critique instead of throwing the work away.
+        return ImproveResult(
+            ok=False,
+            critique=raw,
+            error="Model did not return usable JSON; showing its raw critique.",
+            raw=raw,
+        )
 
     def unload(self) -> None:
         self.model = None

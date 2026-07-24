@@ -18,7 +18,7 @@ from xwave_composer.config import AppConfig
 from xwave_composer.device import empty_cache, gpu_summary
 from xwave_composer.models.flux_generator import FluxGenerator
 from xwave_composer.models.isolation import ObjectIsolator
-from xwave_composer.models.llm_rewriter import PromptRewriter
+from xwave_composer.models.llm_rewriter import ImproveIteration, ImproveResult, PromptRewriter
 from xwave_composer.models.sdxl_hyper import SDXLHyperPipeline
 from xwave_composer.models.upscaler import ImageUpscaler
 from xwave_composer.optimization import (
@@ -86,6 +86,10 @@ class ComposerSession:
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _undo_stack: list[dict[str, Any]] = field(default_factory=list, repr=False)
     _redo_stack: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # Improve loop: per-target {"concept": str, "iterations": [ImproveIteration]}
+    improve_history: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+    last_improve: ImproveResult | None = field(default=None, repr=False)
+    last_improve_target: str = ""
 
     def __post_init__(self) -> None:
         self.config.ensure_dirs()
@@ -766,6 +770,148 @@ class ComposerSession:
             self.last_work = compose_work_image(self.doc)
             self.status = "Layer order updated."
             return self.last_work
+
+    # ------------------------------------------------------------------ improve
+    def _improve_target(self, edit_mode: bool) -> tuple[str, str] | None:
+        """Pick what to critique: ("layer:<id>", ...) or ("output", ...)."""
+        if edit_mode:
+            # Editing means refining the picture that exists, and the only true
+            # image-to-image stage here is the OUTPUT refine over the WORK
+            # composite. That gives the critic a real before and after.
+            if self.last_work is None or self.last_output is None:
+                return None
+            return "output", "edit"
+        obj = self.doc.selected()
+        if obj is not None and obj.image is not None:
+            return f"layer:{obj.id}", "layer"
+        if self.last_output is not None:
+            return "output", "concept"
+        return None
+
+    @staticmethod
+    def _flatten(image: Image.Image) -> Image.Image:
+        """Cut-outs are mostly transparent; show the critic a real picture."""
+        if image.mode != "RGBA":
+            return image.convert("RGB")
+        flat = Image.new("RGB", image.size, (255, 255, 255))
+        flat.paste(image, mask=image.getchannel("A"))
+        return flat
+
+    def improve(self, *, user_notes: str = "", edit_mode: bool = False) -> ImproveResult:
+        """Critique the current image and propose a better prompt.
+
+        Concept mode rewrites the whole prompt for the selected layer. Edit mode
+        compares the WORK composite against the refined OUTPUT and rewrites the
+        OUTPUT prompt as edit instructions, so iterations refine the picture in
+        front of you instead of starting a new one.
+        """
+        with self._lock:
+            picked = self._improve_target(edit_mode)
+            if picked is None:
+                msg = (
+                    "Edit mode needs a refined OUTPUT to compare against."
+                    if edit_mode
+                    else "Generate a layer or an OUTPUT first."
+                )
+                self.last_improve = ImproveResult(ok=False, error=msg)
+                self.status = msg
+                return self.last_improve
+
+            key, kind = picked
+            entry = self.improve_history.setdefault(key, {"concept": "", "iterations": []})
+
+            if kind == "layer":
+                obj = self.doc.selected()
+                assert obj is not None and obj.image is not None
+                current_prompt = obj.prompt
+                result_image = self._flatten(obj.image)
+                base_image = None
+            else:
+                current_prompt = (
+                    self.output_settings.custom_prompt
+                    if self.output_settings.prompt_locked
+                    else self.build_prompt()
+                )
+                assert self.last_output is not None
+                result_image = self._flatten(self.last_output)
+                base_image = self._flatten(self.last_work) if edit_mode else None
+
+            # The first prompt seen for a target is the concept, and it stays the
+            # yardstick so later passes cannot drift away from what was asked for.
+            if not entry["concept"]:
+                entry["concept"] = current_prompt
+
+            self.status = "Looking at the image…"
+
+        # Generation is slow and does not touch shared state; hold no lock.
+        result = self.llm.critique(
+            original_concept=entry["concept"],
+            current_prompt=current_prompt,
+            result_image=result_image,
+            base_image=base_image,
+            user_notes=user_notes,
+            history=list(entry["iterations"])[-3:],
+            edit_mode=edit_mode,
+        )
+
+        with self._lock:
+            if result.ok:
+                entry["iterations"].append(
+                    ImproveIteration(
+                        n=len(entry["iterations"]) + 1,
+                        critique=result.critique,
+                        improved_prompt=result.improved_prompt,
+                        user_notes=user_notes,
+                    )
+                )
+                self.status = f"Improve pass {len(entry['iterations'])} ready."
+            else:
+                self.status = result.error or "Improve failed."
+            self.last_improve = result
+            self.last_improve_target = key
+            if not bool(self.config.get("llm", "keep_loaded", default=False)):
+                self.llm.unload()
+                empty_cache()
+            return result
+
+    def apply_improved(self, text: str | None = None) -> str:
+        """Write an improved prompt where it belongs and report where.
+
+        ``text`` lets the caller apply an edited version of what the model
+        proposed, so the user stays in charge of the final wording.
+        """
+        with self._lock:
+            result = self.last_improve
+            chosen = (text or "").strip()
+            if not chosen:
+                if result is None or not result.ok or not result.improved_prompt:
+                    self.status = "No improved prompt to apply."
+                    return self.status
+                chosen = result.improved_prompt
+            if not self.last_improve_target:
+                self.status = "Nothing has been improved yet."
+                return self.status
+            result = result or ImproveResult(ok=True, improved_prompt=chosen)
+            result.improved_prompt = chosen
+            key = self.last_improve_target
+            if key.startswith("layer:"):
+                obj = self.doc.find_by_id(key.split(":", 1)[1])
+                if obj is None:
+                    self.status = "That layer is gone."
+                    return self.status
+                obj.prompt = result.improved_prompt
+                self.status = "Improved prompt applied — press Generate."
+            else:
+                # Lock it, otherwise the auto-build would overwrite it immediately.
+                self.output_settings.custom_prompt = result.improved_prompt
+                self.output_settings.prompt_locked = True
+                self.status = "Improved OUTPUT prompt applied and locked."
+            return self.status
+
+    def improve_iterations(self, key: str | None = None) -> list[ImproveIteration]:
+        target = key or self.last_improve_target
+        entry = self.improve_history.get(target)
+        return list(entry["iterations"]) if entry else []
 
     # ------------------------------------------------------------------ history
     def _snapshot(self) -> dict[str, Any]:
