@@ -212,9 +212,11 @@
       ctx.translate(layer.x, layer.y);
       ctx.rotate(((layer.rotation || 0) * Math.PI) / 180);
       ctx.globalAlpha = layer.opacity != null ? layer.opacity : 1;
+      ctx.globalCompositeOperation = layer.blend_canvas || "source-over";
       if (layer._img && layer._img.complete && layer._img.naturalWidth) {
         ctx.drawImage(layer._img, -sz.w / 2, -sz.h / 2, sz.w, sz.h);
       }
+      ctx.globalCompositeOperation = "source-over";
       ctx.restore();
     }
 

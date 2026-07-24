@@ -33,6 +33,13 @@ from xwave_composer.optimization import (
     profile_label,
 )
 from xwave_composer.pipeline.session import ComposerSession
+from xwave_composer.canvas.compositor import (
+    BLEND_MODE_LABELS,
+    BLEND_TO_CANVAS,
+    blend_mode_label,
+    feather_alpha_inward,
+    normalize_blend_mode,
+)
 
 logger = logging.getLogger(__name__)
 ASSETS = Path(__file__).resolve().parent / "assets"
@@ -144,8 +151,11 @@ def _blank(w: int = 1024, h: int = 1024) -> Image.Image:
 
 
 def _prune_url_cache(session: ComposerSession) -> None:
-    live = {f"layer:{o.id}" for o in session.doc.objects}
-    live |= {f"thumb:{o.id}" for o in session.doc.objects}
+    live: set[str] = set()
+    for obj in session.doc.objects:
+        feather = round(float(getattr(obj, "feather", 0.0)), 1)
+        live.add(f"layer:{obj.id}:f{feather}")
+        live.add(f"thumb:{obj.id}")
     live |= {"bg", "bg-thumb"}
     for key in list(_URL_CACHE):
         if key not in live:
@@ -156,6 +166,11 @@ def _scene_dict(session: ComposerSession) -> dict[str, Any]:
     _prune_url_cache(session)
     layers = []
     for obj in session.doc.objects:
+        feather = float(getattr(obj, "feather", 0.0))
+        display = obj.image
+        if display is not None and feather > 0.05:
+            display = feather_alpha_inward(display, feather)
+        blend = normalize_blend_mode(getattr(obj, "blend_mode", "normal"))
         layers.append(
             {
                 "id": obj.id,
@@ -167,9 +182,13 @@ def _scene_dict(session: ComposerSession) -> dict[str, Any]:
                 "rotation": float(obj.transform.rotation),
                 "opacity": float(obj.transform.opacity),
                 "visible": bool(obj.transform.visible),
+                "blend_mode": blend,
+                "blend_canvas": BLEND_TO_CANVAS.get(blend, "source-over"),
                 "w": int(obj.image.width) if obj.image else 256,
                 "h": int(obj.image.height) if obj.image else 256,
-                "data_url": _data_url(f"layer:{obj.id}", obj.image, 640),
+                "data_url": _data_url(
+                    f"layer:{obj.id}:f{round(feather, 1)}", display, 640
+                ),
             }
         )
     return {
@@ -238,6 +257,8 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "opacity": 1.0,
             "iso_backdrop": "White",
             "rotation": float(session.doc.bg_rotation),
+            "feather": 0.0,
+            "blend_mode": "Normal",
             "raw": None,
             "prompt_enabled": True,
             "bg_scale": float(session.doc.bg_scale),
@@ -255,6 +276,8 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "opacity": 1.0,
             "iso_backdrop": "White",
             "rotation": 0.0,
+            "feather": 0.0,
+            "blend_mode": "Normal",
             "raw": None,
             "prompt_enabled": True,
             "bg_scale": 1.0,
@@ -270,6 +293,8 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
         "opacity": float(obj.transform.opacity),
         "iso_backdrop": _iso_backdrop_label(obj.isolation_prompt),
         "rotation": float(obj.transform.rotation),
+        "feather": float(getattr(obj, "feather", 0.0)),
+        "blend_mode": blend_mode_label(getattr(obj, "blend_mode", "normal")),
         "raw": obj.raw_image,
         "prompt_enabled": obj.prompt_enabled,
         "bg_scale": 1.0,
@@ -383,7 +408,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
     def pack(run_out: bool = True, sync_out: bool = False) -> tuple:
         """-> work_html, layers_html, output, status,
-        insp_prompt, iso_backdrop, insp_opacity, raw_view, prompt_view,
+        insp_prompt, iso_backdrop, insp_opacity, insp_feather, insp_blend,
+        raw_view, prompt_view,
         llm_prompt_view, mute_prompt_btn, cutout_chk, obj_rotation,
         bg_scale, bg_rotation, bg_offset_x, bg_offset_y, bg_flip_x, bg_flip_y"""
         work = _work(session)
@@ -429,6 +455,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 visible=cutout_on,
             ),
             gr.update(value=insp["opacity"], interactive=obj_on, visible=obj_on),
+            gr.update(value=insp["feather"], interactive=obj_on, visible=obj_on),
+            gr.update(value=insp["blend_mode"], interactive=obj_on, visible=obj_on),
             gr.update(value=insp["raw"], visible=insp["raw"] is not None),
             concat_val,
             gr.update(value=llm_val, visible=llm_on),
@@ -683,7 +711,18 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             delete_btn = gr.Button("Delete", size="sm", variant="stop", scale=1, min_width=72)
                         insp_opacity = gr.Slider(
                             0.0, 1.0, value=1.0, step=0.01, label="Opacity",
-                            interactive=False,
+                            visible=False,
+                        )
+                        insp_feather = gr.Slider(
+                            0.0, 128.0, value=0.0, step=1.0,
+                            label="Edge feather (inward)",
+                            visible=False,
+                        )
+                        insp_blend = gr.Dropdown(
+                            choices=BLEND_MODE_LABELS,
+                            value="Normal",
+                            label="Blend mode",
+                            visible=False,
                         )
                         raw_view = gr.Image(
                             label="Raw — click the subject to re-cut with SAM2",
@@ -951,6 +990,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             insp_prompt,
             iso_backdrop,
             insp_opacity,
+            insp_feather,
+            insp_blend,
             raw_view,
             prompt_view,
             llm_prompt_view,
@@ -1086,10 +1127,38 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             obj = session.doc.selected()
             if obj is None:
                 return pack(run_out=False)
+            if rotation is None:
+                return tuple(gr.update() for _ in pack_out)
             new_rot = float(rotation)
             if abs(obj.transform.rotation - new_rot) < 1e-6:
                 return tuple(gr.update() for _ in pack_out)
             session.update_transform_by_id(obj.id, rotation=new_rot)
+            return pack(run_out=False, sync_out=True)
+
+        def on_feather(feather, den, steps, cfg_v, eta_v, llm, neg, oseed):
+            apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
+            obj = session.doc.selected()
+            if obj is None:
+                return pack(run_out=False)
+            new_f = max(0.0, min(128.0, float(feather)))
+            if abs(float(getattr(obj, "feather", 0.0)) - new_f) < 1e-6:
+                return tuple(gr.update() for _ in pack_out)
+            obj.feather = new_f
+            session.last_work = session.refresh_work()
+            session.status = f"Edge feather → {new_f:.0f}px"
+            return pack(run_out=False, sync_out=True)
+
+        def on_blend_mode(mode_label, den, steps, cfg_v, eta_v, llm, neg, oseed):
+            apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
+            obj = session.doc.selected()
+            if obj is None:
+                return pack(run_out=False)
+            new_mode = normalize_blend_mode(mode_label)
+            if normalize_blend_mode(obj.blend_mode) == new_mode:
+                return tuple(gr.update() for _ in pack_out)
+            obj.blend_mode = new_mode
+            session.last_work = session.refresh_work()
+            session.status = f"Blend mode → {blend_mode_label(new_mode)}"
             return pack(run_out=False, sync_out=True)
 
         def on_bg_transform(
@@ -1099,6 +1168,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             if session.doc.selected_id != "__bg__":
                 return pack(run_out=False)
+            if None in (scale, rotation, offset_x, offset_y):
+                return tuple(gr.update() for _ in pack_out)
             new_scale = max(0.05, float(scale))
             new_rot = float(rotation)
             new_ox = float(offset_x)
@@ -1533,16 +1604,51 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             outputs=[status],
             show_progress="hidden",
         )
-        obj_rotation.change(
+        obj_rotation.submit(
             on_obj_rotation,
             inputs=[obj_rotation, *settings_in],
             outputs=pack_out,
             show_progress="hidden",
         )
-        for bg_comp in (
-            bg_scale, bg_rotation, bg_offset_x, bg_offset_y, bg_flip_x, bg_flip_y,
-        ):
-            bg_comp.change(
+        obj_rotation.blur(
+            on_obj_rotation,
+            inputs=[obj_rotation, *settings_in],
+            outputs=pack_out,
+            show_progress="hidden",
+        )
+        insp_feather.release(
+            on_feather,
+            inputs=[insp_feather, *settings_in],
+            outputs=pack_out,
+            show_progress="hidden",
+        )
+        insp_blend.change(
+            on_blend_mode,
+            inputs=[insp_blend, *settings_in],
+            outputs=pack_out,
+            show_progress="hidden",
+        )
+        for bg_comp in (bg_scale, bg_rotation, bg_offset_x, bg_offset_y):
+            bg_comp.submit(
+                on_bg_transform,
+                inputs=[
+                    bg_scale, bg_rotation, bg_offset_x, bg_offset_y,
+                    bg_flip_x, bg_flip_y, *settings_in,
+                ],
+                outputs=pack_out,
+                show_progress="hidden",
+            )
+            bg_comp.blur(
+                on_bg_transform,
+                inputs=[
+                    bg_scale, bg_rotation, bg_offset_x, bg_offset_y,
+                    bg_flip_x, bg_flip_y, *settings_in,
+                ],
+                outputs=pack_out,
+                show_progress="hidden",
+            )
+        for bg_flip in (bg_flip_x, bg_flip_y):
+            bg_flip.change(
                 on_bg_transform,
                 inputs=[
                     bg_scale, bg_rotation, bg_offset_x, bg_offset_y,

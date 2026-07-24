@@ -654,6 +654,8 @@ class ComposerSession:
                 prompt=source.prompt,
                 prompt_enabled=source.prompt_enabled,
                 isolation_prompt=source.isolation_prompt,
+                feather=float(source.feather),
+                blend_mode=str(source.blend_mode or "normal"),
                 image=source.image.copy() if source.image is not None else None,
                 raw_image=(
                     source.raw_image.copy() if source.raw_image is not None else None

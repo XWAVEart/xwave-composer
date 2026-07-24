@@ -3,16 +3,166 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter
 
 if TYPE_CHECKING:
     from .layers import ObjectLayer, WorkDocument
 
+# UI labels → internal keys (and canvas globalCompositeOperation where available)
+BLEND_MODES: dict[str, str] = {
+    "Normal": "normal",
+    "Multiply": "multiply",
+    "Screen": "screen",
+    "Overlay": "overlay",
+    "Soft Light": "soft_light",
+    "Hard Light": "hard_light",
+    "Add": "add",
+    "Subtract": "subtract",
+    "Difference": "difference",
+    "Darken": "darken",
+    "Lighten": "lighten",
+}
+BLEND_MODE_LABELS = list(BLEND_MODES.keys())
+_BLEND_KEY_TO_LABEL = {v: k for k, v in BLEND_MODES.items()}
+
+# Canvas 2D composite ops for live WORK preview
+BLEND_TO_CANVAS: dict[str, str] = {
+    "normal": "source-over",
+    "multiply": "multiply",
+    "screen": "screen",
+    "overlay": "overlay",
+    "soft_light": "soft-light",
+    "hard_light": "hard-light",
+    "add": "lighter",
+    "subtract": "difference",  # closest canvas stand-in; OUTPUT uses true subtract
+    "difference": "difference",
+    "darken": "darken",
+    "lighten": "lighten",
+}
+
 
 def _blank_rgba(width: int, height: int, color=(32, 32, 36, 255)) -> Image.Image:
     return Image.new("RGBA", (width, height), color)
+
+
+def normalize_blend_mode(value: object, default: str = "normal") -> str:
+    raw = str(value or "").strip()
+    if raw in BLEND_MODES:
+        return BLEND_MODES[raw]
+    key = raw.lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "source_over": "normal",
+        "plus": "add",
+        "lighter": "lighten",
+        "darker": "darken",
+        "softlight": "soft_light",
+        "hardlight": "hard_light",
+    }
+    key = aliases.get(key, key)
+    return key if key in BLEND_TO_CANVAS else default
+
+
+def blend_mode_label(value: object) -> str:
+    key = normalize_blend_mode(value)
+    return _BLEND_KEY_TO_LABEL.get(key, "Normal")
+
+
+def feather_alpha_inward(image: Image.Image, radius: float) -> Image.Image:
+    """Shrink the alpha matte inward and soften the new edge.
+
+    ``radius`` is in source pixels. 0 leaves the image unchanged.
+    Cutouts erode the existing alpha edge; fully opaque images feather
+    inward from the rectangular frame.
+    """
+    r = float(radius)
+    if r <= 0.05 or image is None:
+        return image
+    src = image.convert("RGBA")
+    alpha = src.getchannel("A")
+    w, h = src.size
+    extrema = alpha.getextrema()
+    fully_opaque = extrema is not None and extrema[0] >= 250
+
+    if fully_opaque:
+        from PIL import ImageDraw
+
+        mask = Image.new("L", (w, h), 0)
+        inset = max(1, int(round(r)))
+        if w <= inset * 2 or h <= inset * 2:
+            soft = Image.new("L", (w, h), 0)
+        else:
+            draw = ImageDraw.Draw(mask)
+            draw.rectangle(
+                (inset, inset, w - 1 - inset, h - 1 - inset),
+                fill=255,
+            )
+            soft = mask.filter(
+                ImageFilter.GaussianBlur(radius=max(0.5, min(r, 64.0) * 0.45))
+            )
+    else:
+        # Iterative MinFilter so large radii (up to 128) stay tractable.
+        eroded = alpha
+        remaining = max(1, int(round(r)))
+        while remaining > 0:
+            step = min(16, remaining)
+            k = step * 2 + 1
+            eroded = eroded.filter(ImageFilter.MinFilter(size=k))
+            remaining -= step
+        soft = eroded.filter(
+            ImageFilter.GaussianBlur(radius=max(0.5, min(r, 64.0) * 0.45))
+        )
+
+    out = src.copy()
+    out.putalpha(soft)
+    return out
+
+
+def _blend_rgb(base_rgb: Image.Image, over_rgb: Image.Image, mode: str) -> Image.Image:
+    """Blend two RGB images with the named mode."""
+    ops: dict[str, Callable[[Image.Image, Image.Image], Image.Image]] = {
+        "multiply": ImageChops.multiply,
+        "screen": ImageChops.screen,
+        "overlay": ImageChops.overlay,
+        "soft_light": ImageChops.soft_light,
+        "hard_light": ImageChops.hard_light,
+        "add": ImageChops.add,
+        "subtract": ImageChops.subtract,
+        "difference": ImageChops.difference,
+        "darken": ImageChops.darker,
+        "lighten": ImageChops.lighter,
+    }
+    op = ops.get(mode)
+    if op is None:
+        return over_rgb
+    try:
+        return op(base_rgb, over_rgb)
+    except Exception:
+        # Some Pillow builds omit soft/hard light; fall back sensibly.
+        if mode in ("soft_light", "hard_light"):
+            return ImageChops.overlay(base_rgb, over_rgb)
+        return over_rgb
+
+
+def composite_layer(
+    base: Image.Image,
+    overlay: Image.Image,
+    blend_mode: str = "normal",
+) -> Image.Image:
+    """Composite ``overlay`` onto ``base`` with optional Photoshop-style blend."""
+    mode = normalize_blend_mode(blend_mode)
+    base_rgba = base.convert("RGBA")
+    over_rgba = overlay.convert("RGBA")
+    if mode == "normal":
+        return Image.alpha_composite(base_rgba, over_rgba)
+
+    base_rgb = base_rgba.convert("RGB")
+    over_rgb = over_rgba.convert("RGB")
+    blended_rgb = _blend_rgb(base_rgb, over_rgb, mode)
+    blended = blended_rgb.convert("RGBA")
+    blended.putalpha(over_rgba.getchannel("A"))
+    return Image.alpha_composite(base_rgba, blended)
 
 
 def transform_object_layer(
@@ -24,7 +174,7 @@ def transform_object_layer(
     if layer.image is None or not layer.transform.visible:
         return None
 
-    src = layer.image.convert("RGBA")
+    src = feather_alpha_inward(layer.image.convert("RGBA"), getattr(layer, "feather", 0.0))
     t = layer.transform
 
     # Scale (stretch supported via independent scale_x / scale_y)
@@ -128,7 +278,9 @@ def compose_work_image(doc: "WorkDocument") -> Image.Image:
     for obj in doc.objects:
         placed = transform_object_layer(obj, w, h)
         if placed is not None:
-            composed = Image.alpha_composite(composed, placed)
+            composed = composite_layer(
+                composed, placed, getattr(obj, "blend_mode", "normal")
+            )
 
     return composed.convert("RGB")
 

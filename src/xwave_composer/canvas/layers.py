@@ -62,6 +62,10 @@ class ObjectLayer:
     # the visual layer untouched on the WORK canvas.
     prompt_enabled: bool = True
     isolation_prompt: str = "isolated object on plain white background"
+    # Soften cutout edges by shrinking/blurring alpha inward (pixels).
+    feather: float = 0.0
+    # Photoshop-style blend when compositing onto the WORK stack.
+    blend_mode: str = "normal"
     # RGBA image with transparent background
     image: Image.Image | None = None
     # Raw generation before isolation (for SAM2 click re-run)

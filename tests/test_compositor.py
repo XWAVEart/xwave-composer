@@ -31,6 +31,31 @@ def test_compose_background_flip_x():
     assert out.getpixel((56, 16))[0] > 200  # red on right after flip
 
 
+def test_feather_alpha_inward_softens_edge():
+    from xwave_composer.canvas.compositor import feather_alpha_inward
+
+    # Opaque disc on transparent canvas — feather should clear the rim.
+    rgba = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    for y in range(64):
+        for x in range(64):
+            if (x - 32) ** 2 + (y - 32) ** 2 <= 20**2:
+                rgba.putpixel((x, y), (255, 0, 0, 255))
+    soft = feather_alpha_inward(rgba, radius=6)
+    # Near the old disc rim should be much more transparent.
+    assert soft.getpixel((32, 12))[3] < 80
+    # Deep interior should remain opaque.
+    assert soft.getpixel((32, 32))[3] > 200
+
+
+def test_feather_opaque_image_insets_frame():
+    from xwave_composer.canvas.compositor import feather_alpha_inward
+
+    rgba = Image.new("RGBA", (64, 64), (255, 0, 0, 255))
+    soft = feather_alpha_inward(rgba, radius=8)
+    assert soft.getpixel((0, 0))[3] < 40
+    assert soft.getpixel((32, 32))[3] > 200
+
+
 def test_compose_background_scale_zoom():
     doc = WorkDocument(width=64, height=64)
     doc.background = Image.new("RGB", (64, 64), (12, 34, 56))
@@ -48,6 +73,17 @@ def test_compose_background_offset():
     out = compose_work_image(doc)
     assert out.getpixel((0, 32)) != (200, 10, 10)
     assert out.getpixel((48, 32)) == (200, 10, 10)
+
+
+def test_blend_multiply_darkens():
+    from xwave_composer.canvas.compositor import composite_layer
+
+    base = Image.new("RGBA", (32, 32), (200, 200, 200, 255))
+    over = Image.new("RGBA", (32, 32), (100, 100, 100, 255))
+    out = composite_layer(base, over, "multiply")
+    r, g, b, a = out.getpixel((16, 16))
+    assert a == 255
+    assert r < 200 and g < 200 and b < 200
 
 
 def test_compose_object_centered():
