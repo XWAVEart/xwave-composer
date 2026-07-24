@@ -775,8 +775,24 @@ class ComposerSession:
             return self.last_work
 
     # ------------------------------------------------------------------ improve
-    def _improve_target(self, edit_mode: bool) -> tuple[str, str] | None:
-        """Pick what to critique: ("layer:<id>", ...) or ("output", ...)."""
+    def _improve_target(
+        self, edit_mode: bool, want: str | None = None
+    ) -> tuple[str, str] | None:
+        """Pick what to critique: ("layer:<id>", ...) or ("output", ...).
+
+        ``want`` forces the choice. Without it the selected layer wins, which
+        is right when iterating on one sticker but surprising when the user is
+        talking about the whole picture -- so callers surface the target.
+        """
+        if want == "output":
+            if self.last_output is None:
+                return None
+            return "output", "edit" if edit_mode else "concept"
+        if want == "layer":
+            obj = self.doc.selected()
+            if obj is None or obj.image is None:
+                return None
+            return f"layer:{obj.id}", "layer"
         if edit_mode:
             # Editing means refining the picture that exists, and the only true
             # image-to-image stage here is the OUTPUT refine over the WORK
@@ -800,7 +816,21 @@ class ComposerSession:
         flat.paste(image, mask=image.getchannel("A"))
         return flat
 
-    def improve(self, *, user_notes: str = "", edit_mode: bool = False) -> ImproveResult:
+    def improve_target_label(self, edit_mode: bool = False, want: str | None = None) -> str:
+        """Human-readable description of what Improve would look at right now."""
+        picked = self._improve_target(edit_mode, want)
+        if picked is None:
+            return "nothing yet"
+        key, _ = picked
+        if key == "output":
+            return "the composed OUTPUT"
+        obj = self.doc.find_by_id(key.split(":", 1)[1])
+        prompt = (obj.prompt if obj else "")[:40]
+        return f"the '{prompt}' layer" if prompt else "the selected layer"
+
+    def improve(
+        self, *, user_notes: str = "", edit_mode: bool = False, target: str | None = None
+    ) -> ImproveResult:
         """Critique the current image and propose a better prompt.
 
         Concept mode rewrites the whole prompt for the selected layer. Edit mode
@@ -809,7 +839,7 @@ class ComposerSession:
         front of you instead of starting a new one.
         """
         with self._lock:
-            picked = self._improve_target(edit_mode)
+            picked = self._improve_target(edit_mode, target)
             if picked is None:
                 msg = (
                     "Edit mode needs a refined OUTPUT to compare against."

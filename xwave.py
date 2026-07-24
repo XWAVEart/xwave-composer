@@ -158,6 +158,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--notes", default="", help="What you think is wrong")
     p.add_argument("--edit", action="store_true", help="Refine the existing image instead")
     p.add_argument("--apply", action="store_true", help="Apply the improved prompt")
+    p.add_argument(
+        "--target",
+        choices=("layer", "output"),
+        default=None,
+        help="What to look at. Default: the selected layer, else the OUTPUT.",
+    )
 
     sub.add_parser("apply", help="Apply the last improved prompt")
     sub.add_parser("history", help="Show improve iterations")
@@ -246,11 +252,20 @@ def main(argv: list[str] | None = None) -> int:
             result = post(
                 base,
                 "/improve",
-                {"notes": args.notes, "edit_mode": args.edit, "apply": args.apply},
+                {
+                    "notes": args.notes,
+                    "edit_mode": args.edit,
+                    "apply": args.apply,
+                    "target": args.target,
+                },
             )
             if args.json:
                 print(json.dumps(result, indent=2))
             else:
+                # Say what was judged: the default is the selected layer, which
+                # is not always what the notes were about.
+                if result.get("looked_at"):
+                    print(f"looked at: {result['looked_at']}\n")
                 if result.get("critique"):
                     print("CRITIQUE\n" + result["critique"] + "\n")
                 if result.get("improved_prompt"):

@@ -1025,9 +1025,16 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
         def on_improve(notes, edit_mode):
             """Look at the current image and propose a better prompt."""
+            # Name the subject up front: Improve defaults to the selected layer,
+            # which surprises anyone whose notes were about the whole picture.
+            looked_at = session.improve_target_label(bool(edit_mode))
             result = session.improve(user_notes=str(notes or ""), edit_mode=bool(edit_mode))
             if result.ok:
-                return result.critique, result.improved_prompt, session.status
+                return (
+                    f"Looked at {looked_at}.\n\n{result.critique}",
+                    result.improved_prompt,
+                    session.status,
+                )
             # A failed parse still usually carries a readable critique; show it
             # rather than discarding work the model already did.
             note = result.error or "Improve failed."

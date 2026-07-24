@@ -64,6 +64,9 @@ class RefineBody(BaseModel):
 class ImproveBody(BaseModel):
     notes: str = ""
     edit_mode: bool = False
+    target: str | None = Field(
+        default=None, description='"layer", "output", or null to choose automatically.'
+    )
     apply: bool = Field(default=False, description="Write the improved prompt straight back.")
 
 
@@ -257,10 +260,16 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
     @router.post("/improve")
     def improve(body: ImproveBody) -> dict[str, Any]:
         _require_models(session)
-        result = session.improve(user_notes=body.notes, edit_mode=body.edit_mode)
+        # Report what was looked at: with no explicit target the selected layer
+        # wins, which surprises anyone whose notes were about the whole picture.
+        looked_at = session.improve_target_label(body.edit_mode, body.target)
+        result = session.improve(
+            user_notes=body.notes, edit_mode=body.edit_mode, target=body.target
+        )
         applied = session.apply_improved() if (body.apply and result.ok) else None
         return {
             "ok": result.ok,
+            "looked_at": looked_at,
             "critique": result.critique,
             "improved_prompt": result.improved_prompt,
             "error": result.error,
