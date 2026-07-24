@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -61,6 +62,17 @@ def main(argv: list[str] | None = None) -> int:
     src = root / "src"
     if str(src) not in sys.path:
         sys.path.insert(0, str(src))
+
+    # Persist the TorchInductor cache inside the project.
+    #
+    # optimization.compile is on by default, and regionally compiling the Flux
+    # transformer costs about 8 minutes on a first run. Inductor caches the
+    # result, but its default cache lives under the system temp directory,
+    # which is cleared often enough that the cost is paid again and again.
+    # Pointing it at the project turns later startups into a cache hit.
+    #
+    # An explicit TORCHINDUCTOR_CACHE_DIR always wins.
+    os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(root / ".cache" / "inductor"))
 
     from xwave_composer.config import AppConfig
     from xwave_composer.ui.gradio_app import build_app
