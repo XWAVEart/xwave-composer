@@ -92,6 +92,18 @@ python run.py
 Open on this machine: `http://127.0.0.1:7860`  
 Open on the LAN: `http://<this-host-ip>:7860`
 
+## Two surfaces
+
+| | |
+|---|---|
+| **`/studio`** | The product. Two panes, a sticker shelf, one prompt bar, Improve. Nothing else. |
+| **`/`** | The full workspace: every sampler knob, compute profile, style preset, LoRA slot and export setting. |
+
+The studio is plain HTML on the control API below, so it does not inherit the
+Gradio layout and can be edited and reloaded without restarting the app. Expert
+is one click away from it, and both drive the same session — so a change made in
+one shows up in the other, and in the CLI.
+
 ## Simple and advanced mode
 
 The app opens in **Simple** mode: a prompt, the two canvases, the layer tray, Improve,
