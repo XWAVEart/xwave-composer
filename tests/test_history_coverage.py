@@ -279,3 +279,41 @@ def test_timeline_view_does_not_block_on_the_session_lock(tmp_path):
     finally:
         release.set()
         worker.join(timeout=5)
+
+
+def test_coalesced_history_is_one_undo_entry(tmp_path):
+    """Improve-and-regenerate must revert prompt and pixels in one press."""
+    session = _session(tmp_path)
+    layer = session.add_empty_object()
+    session.doc.selected_id = layer.id
+    session.generate_selected("a plain crab")
+    original_prompt = session.doc.find_by_id(layer.id).prompt
+    original_image = session.doc.find_by_id(layer.id).image
+    depth_before = len(session._undo_stack)
+
+    with session.coalesced_history():
+        obj = session.doc.find_by_id(layer.id)
+        obj.prompt = "a magnificent crab"
+        session.generate_selected("a magnificent crab")
+
+    assert len(session._undo_stack) == depth_before + 1, "should be one entry, not two"
+
+    session.undo()
+
+    restored = session.doc.find_by_id(layer.id)
+    assert restored.prompt == original_prompt
+    assert restored.image is original_image
+
+
+def test_coalesced_history_depth_resets_on_error(tmp_path):
+    session = _session(tmp_path)
+    try:
+        with session.coalesced_history():
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    # A leaked depth would silently disable undo for the rest of the session.
+    assert session._history_depth == 0
+    depth = len(session._undo_stack)
+    session.push_history()
+    assert len(session._undo_stack) == depth + 1

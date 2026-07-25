@@ -332,27 +332,34 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
             user_notes=body.notes, edit_mode=body.edit_mode, target=body.target
         )
         applied = None
-        if result.ok and (body.apply or body.regenerate):
+        if result.ok and body.regenerate:
+            # In-situ: critique -> prompt -> regenerated image in one call.
+            # Coalesced so the whole thing is ONE undo entry: separately, the
+            # first Ctrl+Z would restore the old picture but keep the new
+            # wording, which is a state the user never asked for.
+            with session.coalesced_history():
+                session.apply_improved()
+                target_key = session.last_improve_target
+                if target_key.startswith("layer:"):
+                    layer_id = target_key.split(":", 1)[1]
+                    obj = session.doc.find_by_id(layer_id)
+                    if obj is not None:
+                        session.select_layer_id(layer_id)
+                        session.generate_selected(
+                            obj.prompt,
+                            isolation_prompt=obj.isolation_prompt,
+                            # Honour how this layer was made. Defaulting to
+                            # True would turn a full-image layer into a cutout.
+                            isolate=obj.cutout,
+                        )
+                session.run_output(session.refresh_work())
+            # apply_improved's message ends "press Generate", which is stale
+            # once the regeneration has already happened in this same call.
+            applied = "Improved and remade."
+        elif result.ok and body.apply:
             # apply_improved pushes history, so the wording change is undoable
             # whether the target was a sticker prompt or the OUTPUT prompt.
             applied = session.apply_improved()
-        if result.ok and body.regenerate:
-            # In-situ: carry the improvement through to a new image in the same
-            # call, so one press goes critique -> prompt -> regenerated result.
-            target_key = session.last_improve_target
-            if target_key.startswith("layer:"):
-                layer_id = target_key.split(":", 1)[1]
-                obj = session.doc.find_by_id(layer_id)
-                if obj is not None:
-                    session.select_layer_id(layer_id)
-                    session.generate_selected(
-                        obj.prompt,
-                        isolation_prompt=obj.isolation_prompt,
-                        # Honour how this layer was made. Defaulting to True
-                        # would silently turn a full-image layer into a cutout.
-                        isolate=obj.cutout,
-                    )
-            session.run_output(session.refresh_work())
         return {
             "ok": result.ok,
             "looked_at": looked_at,

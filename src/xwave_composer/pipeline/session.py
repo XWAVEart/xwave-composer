@@ -7,6 +7,7 @@ import logging
 import random
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,8 @@ class ComposerSession:
     last_enhance_failed: bool = False
     _undo_stack: list[dict[str, Any]] = field(default_factory=list, repr=False)
     _redo_stack: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # >0 while a multi-step operation is being grouped into one undo entry.
+    _history_depth: int = field(default=0, repr=False)
     # Improve loop: per-target {"concept": str, "iterations": [ImproveIteration]}
     improve_history: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
     last_improve: ImproveResult | None = field(default=None, repr=False)
@@ -1218,13 +1221,36 @@ class ComposerSession:
         that skips it leaves the newest undo entry describing a much older
         composition, and one Ctrl+Z then reverts everything since. Every
         method that mutates the document must call this first.
+
+        Inside coalesced_history() this is a no-op, so a multi-step operation
+        lands as a single undo entry instead of one per internal step.
         """
         with self._lock:
+            if self._history_depth > 0:
+                return
             self._undo_stack.append(self._snapshot())
             # Drop the oldest entries past the limit.
             del self._undo_stack[:-HISTORY_LIMIT]
             # A new edit invalidates any redo branch.
             self._redo_stack.clear()
+
+    @contextmanager
+    def coalesced_history(self):
+        """Group a multi-step operation into ONE undo entry.
+
+        Improve-and-regenerate rewrites a prompt and then replaces the image.
+        Left alone that is two undo entries, so the first Ctrl+Z would put the
+        old picture back while leaving the new wording in place — a state the
+        user never asked for and cannot see the logic of.
+        """
+        with self._lock:
+            self.push_history()
+            self._history_depth += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._history_depth = max(0, self._history_depth - 1)
 
     @property
     def can_undo(self) -> bool:
