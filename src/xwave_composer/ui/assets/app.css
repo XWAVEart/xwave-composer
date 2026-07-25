@@ -374,6 +374,21 @@ footer {
   width: 100%;
 }
 
+.xwave-canvas-size {
+  margin-top: 8px;
+  align-items: end;
+}
+
+.xwave-seed-row {
+  align-items: end;
+}
+
+.xwave-built-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 #xwave-layer-stack {
   display: flex;
   flex-direction: column;

@@ -134,6 +134,8 @@ def build_output_prompt(
     order="pcs" (default): prefix is fused into the user prompts with a space
     (no comma), then ", " + suffix — matching the CSV style sheets.
     order="psc": prefix, suffix, then user prompts — comma-separated.
+    order="cps": user prompts, prefix, suffix — comma-separated.
+    order="spc": suffix, prefix, then user prompts — comma-separated.
     """
     parts: list[str] = []
     if doc.background_prompt.strip():
@@ -154,6 +156,12 @@ def build_output_prompt(
 
     if order == "psc":
         pieces = [p for p in (prefix, suffix, content) if p]
+        return ", ".join(pieces)
+    if order == "cps":
+        pieces = [p for p in (content, prefix, suffix) if p]
+        return ", ".join(pieces)
+    if order == "spc":
+        pieces = [p for p in (suffix, prefix, content) if p]
         return ", ".join(pieces)
 
     # pcs: PREFIX USER SUFFIX — fuse prefix into the user text (no comma).

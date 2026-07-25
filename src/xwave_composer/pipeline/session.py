@@ -55,8 +55,11 @@ class OutputSettings:
     use_llm_rewrite: bool = False
     negative_prompt: str = "blurry, low quality, deformed, watermark, text"
     seed: int = -1
-    # Prompt concatenation order: "pcs" = prefix, content, suffix
-    #                             "psc" = prefix, suffix, content
+    # Prompt concatenation order:
+    #   pcs = prefix, content, suffix (prefix fused with space)
+    #   psc = prefix, suffix, content
+    #   cps = content, prefix, suffix
+    #   spc = suffix, prefix, content
     concat_order: str = "pcs"
     # Manual style: overrides the CSV preset prefix/suffix when enabled.
     manual_style: bool = False
@@ -96,6 +99,9 @@ class ComposerSession:
     pending_raw: Image.Image | None = None
     pending_prompt: str = ""
     pending_isolation_prompt: str = ""
+    # Object-layer UI preference: when False, generate/import places the full
+    # image and the isolation prompt is cleared / unused.
+    layer_cutout: bool = True
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     # Serialises the single shared vision model between enhance and critique,
     # separate from _lock so LLM work never blocks status polling.
@@ -557,8 +563,8 @@ class ComposerSession:
 
             self.push_history()
             self.status = "Generating object with Flux…"
-            iso = isolation_prompt or obj.isolation_prompt
             if isolate:
+                iso = (isolation_prompt or obj.isolation_prompt or "").strip()
                 raw = self.flux.generate_object(
                     object_prompt=prompt,
                     isolation_prompt=iso,
@@ -568,6 +574,7 @@ class ComposerSession:
                 )
             else:
                 # Full-image placement: no plain-backdrop coaxing, no cutout.
+                iso = ""
                 raw = self.flux.generate(
                     prompt=prompt,
                     width=min(1024, self.doc.width),
@@ -663,11 +670,21 @@ class ComposerSession:
             return self._apply_transform(obj, x, y, scale_x, scale_y, rotation, opacity)
 
     def reset_selected_transform(self) -> Image.Image:
-        """Reset selected object layer to center, scale 1, rotation 0."""
+        """Reset selected layer pose. BG → scale/rotation/flip; object → center."""
         with self._lock:
+            if self.doc.selected_id == "__bg__":
+                self.doc.bg_scale = 1.0
+                self.doc.bg_rotation = 0.0
+                self.doc.bg_offset_x = 0.0
+                self.doc.bg_offset_y = 0.0
+                self.doc.bg_flip_x = False
+                self.doc.bg_flip_y = False
+                self.last_work = compose_work_image(self.doc)
+                self.status = "Background pose reset."
+                return self.last_work
             obj = self.doc.selected()
             if obj is None:
-                self.status = "Select an object layer to reset."
+                self.status = "Select a layer to reset."
                 return self.last_work or compose_work_image(self.doc)
             t = obj.transform
             t.x = self.doc.width / 2
@@ -678,6 +695,64 @@ class ComposerSession:
             self.last_work = compose_work_image(self.doc)
             self.status = f"Reset transform for {obj.name or obj.id}."
             return self.last_work
+
+    def update_background_transform(
+        self,
+        *,
+        scale: float | None = None,
+        rotation: float | None = None,
+        offset_x: float | None = None,
+        offset_y: float | None = None,
+        flip_x: bool | None = None,
+        flip_y: bool | None = None,
+    ) -> Image.Image:
+        """Update background placement controls and recompose WORK."""
+        with self._lock:
+            if scale is not None:
+                self.doc.bg_scale = max(0.05, float(scale))
+            if rotation is not None:
+                self.doc.bg_rotation = float(rotation)
+            if offset_x is not None:
+                self.doc.bg_offset_x = float(offset_x)
+            if offset_y is not None:
+                self.doc.bg_offset_y = float(offset_y)
+            if flip_x is not None:
+                self.doc.bg_flip_x = bool(flip_x)
+            if flip_y is not None:
+                self.doc.bg_flip_y = bool(flip_y)
+            self.last_work = compose_work_image(self.doc)
+            self.status = "Background transform updated."
+            return self.last_work
+
+    def set_layer_cutout(self, enabled: bool) -> None:
+        """Toggle object cut-out; clear isolation prompt when disabled."""
+        self.layer_cutout = bool(enabled)
+        if not self.layer_cutout:
+            obj = self.doc.selected()
+            if obj is not None:
+                obj.isolation_prompt = ""
+            self.pending_isolation_prompt = ""
+        elif self.doc.selected() is not None:
+            obj = self.doc.selected()
+            assert obj is not None
+            if not (obj.isolation_prompt or "").strip():
+                obj.isolation_prompt = (
+                    "isolated on plain white background, centered"
+                )
+
+    def set_isolation_backdrop(self, backdrop: str) -> str:
+        """Set white/black isolation backdrop for the selected object layer."""
+        label = str(backdrop or "White").strip().title()
+        prompt = (
+            "isolated on plain black background, centered"
+            if label == "Black"
+            else "isolated on plain white background, centered"
+        )
+        obj = self.doc.selected()
+        if obj is not None:
+            obj.isolation_prompt = prompt
+        self.pending_isolation_prompt = prompt
+        return prompt
 
     def duplicate_selected(self) -> Image.Image:
         """Duplicate the selected object, including its images and settings."""
@@ -692,6 +767,8 @@ class ComposerSession:
                 prompt=source.prompt,
                 prompt_enabled=source.prompt_enabled,
                 isolation_prompt=source.isolation_prompt,
+                feather=float(source.feather),
+                blend_mode=str(source.blend_mode or "normal"),
                 image=source.image.copy() if source.image is not None else None,
                 raw_image=(
                     source.raw_image.copy() if source.raw_image is not None else None
@@ -1134,6 +1211,8 @@ class ComposerSession:
                     "prompt_enabled": o.prompt_enabled,
                     "isolation_prompt": o.isolation_prompt,
                     "cutout": o.cutout,
+                    "feather": o.feather,
+                    "blend_mode": o.blend_mode,
                     "name": o.name,
                 }
                 for o in self.doc.objects
@@ -1141,6 +1220,17 @@ class ComposerSession:
             "selected_id": self.doc.selected_id,
             "background": self.doc.background,
             "background_prompt": self.doc.background_prompt,
+            # Background placement is document state like any other; leaving it
+            # out would make undo and timeline scrubs silently reset the
+            # backdrop's scale, rotation, offset and flips.
+            "bg_placement": (
+                self.doc.bg_scale,
+                self.doc.bg_rotation,
+                self.doc.bg_offset_x,
+                self.doc.bg_offset_y,
+                self.doc.bg_flip_x,
+                self.doc.bg_flip_y,
+            ),
             "active_backdrop_id": self.active_backdrop_id,
             # Improving the scene locks a custom OUTPUT prompt; without these
             # the undo that the UI promises would revert pixels but not wording.
@@ -1162,11 +1252,23 @@ class ComposerSession:
             obj.prompt_enabled = rec["prompt_enabled"]
             obj.isolation_prompt = rec["isolation_prompt"]
             obj.cutout = rec.get("cutout", True)
+            obj.feather = rec.get("feather", 0.0)
+            obj.blend_mode = rec.get("blend_mode", "normal")
             obj.name = rec["name"]
             # Content may differ from whatever a client has cached.
             obj.rev += 1
         self.doc.background = snap.get("background")
         self.doc.background_prompt = snap.get("background_prompt", "")
+        placement = snap.get("bg_placement")
+        if placement is not None:
+            (
+                self.doc.bg_scale,
+                self.doc.bg_rotation,
+                self.doc.bg_offset_x,
+                self.doc.bg_offset_y,
+                self.doc.bg_flip_x,
+                self.doc.bg_flip_y,
+            ) = placement
         self.background_rev += 1
         # Which library chip is highlighted has to follow the backdrop, or the
         # shelf marks one backdrop active while the canvas shows another.

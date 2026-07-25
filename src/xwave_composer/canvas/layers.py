@@ -70,6 +70,10 @@ class ObjectLayer:
     # Whether this layer was cut out. Regeneration must honour it: re-running a
     # full-image layer through isolation would silently turn it into a cutout.
     cutout: bool = True
+    # Soften cutout edges by shrinking/blurring alpha inward (pixels).
+    feather: float = 0.0
+    # Photoshop-style blend when compositing onto the WORK stack.
+    blend_mode: str = "normal"
     # RGBA image with transparent background
     image: Image.Image | None = None
     # Raw generation before isolation (for SAM2 click re-run)
@@ -90,6 +94,14 @@ class WorkDocument:
     height: int = 1024
     background: Image.Image | None = None
     background_prompt: str = ""
+    # Background placement on the canvas (center-anchored). Scale 1.0 matches
+    # the previous fill-to-canvas size; flip/rotation apply around center.
+    bg_scale: float = 1.0
+    bg_rotation: float = 0.0
+    bg_offset_x: float = 0.0
+    bg_offset_y: float = 0.0
+    bg_flip_x: bool = False
+    bg_flip_y: bool = False
     objects: list[ObjectLayer] = field(default_factory=list)
     selected_id: str | None = None
 

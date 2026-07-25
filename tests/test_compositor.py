@@ -17,6 +17,75 @@ def test_compose_background_only():
     assert out.getpixel((0, 0)) == (10, 20, 30)
 
 
+def test_compose_background_flip_x():
+    doc = WorkDocument(width=64, height=32)
+    # Left half red, right half blue — flip X should swap them.
+    bg = Image.new("RGB", (64, 32), (0, 0, 255))
+    for x in range(32):
+        for y in range(32):
+            bg.putpixel((x, y), (255, 0, 0))
+    doc.background = bg
+    doc.bg_flip_x = True
+    out = compose_work_image(doc)
+    assert out.getpixel((8, 16))[2] > 200  # blue on left after flip
+    assert out.getpixel((56, 16))[0] > 200  # red on right after flip
+
+
+def test_feather_alpha_inward_softens_edge():
+    from xwave_composer.canvas.compositor import feather_alpha_inward
+
+    # Opaque disc on transparent canvas — feather should clear the rim.
+    rgba = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    for y in range(64):
+        for x in range(64):
+            if (x - 32) ** 2 + (y - 32) ** 2 <= 20**2:
+                rgba.putpixel((x, y), (255, 0, 0, 255))
+    soft = feather_alpha_inward(rgba, radius=6)
+    # Near the old disc rim should be much more transparent.
+    assert soft.getpixel((32, 12))[3] < 80
+    # Deep interior should remain opaque.
+    assert soft.getpixel((32, 32))[3] > 200
+
+
+def test_feather_opaque_image_insets_frame():
+    from xwave_composer.canvas.compositor import feather_alpha_inward
+
+    rgba = Image.new("RGBA", (64, 64), (255, 0, 0, 255))
+    soft = feather_alpha_inward(rgba, radius=8)
+    assert soft.getpixel((0, 0))[3] < 40
+    assert soft.getpixel((32, 32))[3] > 200
+
+
+def test_compose_background_scale_zoom():
+    doc = WorkDocument(width=64, height=64)
+    doc.background = Image.new("RGB", (64, 64), (12, 34, 56))
+    doc.bg_scale = 2.0
+    out = compose_work_image(doc)
+    assert out.size == (64, 64)
+    assert out.getpixel((32, 32)) == (12, 34, 56)
+
+
+def test_compose_background_offset():
+    doc = WorkDocument(width=64, height=64)
+    # Solid red; after +16 X offset the left edge should show the blank fill.
+    doc.background = Image.new("RGB", (64, 64), (200, 10, 10))
+    doc.bg_offset_x = 16
+    out = compose_work_image(doc)
+    assert out.getpixel((0, 32)) != (200, 10, 10)
+    assert out.getpixel((48, 32)) == (200, 10, 10)
+
+
+def test_blend_multiply_darkens():
+    from xwave_composer.canvas.compositor import composite_layer
+
+    base = Image.new("RGBA", (32, 32), (200, 200, 200, 255))
+    over = Image.new("RGBA", (32, 32), (100, 100, 100, 255))
+    out = composite_layer(base, over, "multiply")
+    r, g, b, a = out.getpixel((16, 16))
+    assert a == 255
+    assert r < 200 and g < 200 and b < 200
+
+
 def test_compose_object_centered():
     doc = WorkDocument(width=200, height=200)
     doc.background = Image.new("RGB", (200, 200), (0, 0, 0))
@@ -76,6 +145,12 @@ def test_build_output_prompt_order():
 
     p_psc = build_output_prompt(doc, preset, order="psc")
     assert p_psc == "oil painting of, rich textures, painterly, forest, fox, cabin"
+
+    p_cps = build_output_prompt(doc, preset, order="cps")
+    assert p_cps == "forest, fox, cabin, oil painting of, rich textures, painterly"
+
+    p_spc = build_output_prompt(doc, preset, order="spc")
+    assert p_spc == "rich textures, painterly, oil painting of, forest, fox, cabin"
 
 
 def test_build_output_prompt_manual_style():

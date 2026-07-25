@@ -317,3 +317,45 @@ def test_coalesced_history_depth_resets_on_error(tmp_path):
     depth = len(session._undo_stack)
     session.push_history()
     assert len(session._undo_stack) == depth + 1
+
+
+def test_snapshot_covers_upstream_layer_fields(tmp_path):
+    """feather and blend_mode are layer state; undo must restore them."""
+    session = _session(tmp_path)
+    layer = session.add_empty_object()
+    session.doc.selected_id = layer.id
+    session.generate_selected("a crab")
+    layer = session.doc.find_by_id(layer.id)
+    layer.feather = 12.0
+    layer.blend_mode = "multiply"
+
+    session.push_history()
+    layer.feather = 64.0
+    layer.blend_mode = "screen"
+    session.undo()
+
+    restored = session.doc.find_by_id(layer.id)
+    assert restored.feather == 12.0
+    assert restored.blend_mode == "multiply"
+
+
+def test_snapshot_covers_background_placement(tmp_path):
+    """bg scale/rotation/offset/flip are document state; undo must restore them."""
+    session = _session(tmp_path)
+    session.generate_background("a beach")
+    session.doc.bg_scale = 1.4
+    session.doc.bg_rotation = 15.0
+    session.doc.bg_offset_x = 30.0
+    session.doc.bg_flip_x = True
+
+    session.push_history()
+    session.doc.bg_scale = 2.5
+    session.doc.bg_rotation = -40.0
+    session.doc.bg_offset_x = -80.0
+    session.doc.bg_flip_x = False
+    session.undo()
+
+    assert session.doc.bg_scale == 1.4
+    assert session.doc.bg_rotation == 15.0
+    assert session.doc.bg_offset_x == 30.0
+    assert session.doc.bg_flip_x is True
