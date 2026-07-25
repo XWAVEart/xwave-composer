@@ -179,6 +179,17 @@ class ComposerSession:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("SAM2 unavailable: %s", exc)
                 parts.append("SAM2 ✗ (rembg fallback)")
+        # With keep_loaded set, the vision model is going to be resident for the
+        # whole session anyway, so pay its multi-minute disk load here with the
+        # other models rather than the first time someone presses Enhance and
+        # watches a button do nothing.
+        if bool(self.config.get("llm", "keep_loaded", default=False)):
+            try:
+                self.llm.load()
+                parts.append("prompt LLM ✓")
+            except Exception as exc:  # noqa: BLE001 - optional; never block startup
+                logger.warning("Prompt LLM preload failed: %s", exc)
+                parts.append("prompt LLM ✗ (loads on first use)")
         try:
             self.isolator.load_rembg()
             parts.append("rembg ✓")
@@ -1156,8 +1167,22 @@ class ComposerSession:
         Not recorded on the timeline: nothing about the composition changes
         until the user actually generates with the result.
         """
+        if not (text or "").strip():
+            # Guard here, not just in the client: otherwise an empty prompt
+            # through the API loads 7.5 GB of model to hand back an empty
+            # string.
+            return ""
         with self._lock:
-            self.status = "Enhancing the prompt…"
+            # Say which wait this is. Cold, the model is ~7.5 GB off disk and
+            # takes minutes; warm it is seconds. A single "Enhancing…" for both
+            # makes the first press look like the app has hung.
+            if self.llm is not None and not self.llm.ready:
+                self.status = (
+                    "Loading the language model — first use after a restart "
+                    "takes a few minutes. Later ones take seconds."
+                )
+            else:
+                self.status = "Enhancing the prompt…"
         # One LLM instance serves enhance and critique, so serialise callers:
         # otherwise a finishing enhance can unload the model out from under an
         # in-flight improve. The lock is separate from the session lock so this
