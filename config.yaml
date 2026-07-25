@@ -48,8 +48,24 @@ sdxl_hyper:
   hyper_lora_weight_name: "Hyper-SDXL-8steps-lora.safetensors"
   # Alternative single-file / UNet checkpoints can be set here.
   unet_id: null
-  default_denoise: 0.3
-  default_steps: 6
+  # Tuned on an RTX 5090 against a fixed composition with the seed pinned.
+  #
+  # The non-obvious part: diffusers img2img runs int(steps * denoise) actual
+  # denoising steps, so at the old 6 steps the denoise slider only had six
+  # distinct settings and 0.20/0.30 produced byte-identical images. Raising
+  # steps is what gives the slider real resolution.
+  #
+  # Denoise is the lever that decides whether a placed object looks composited
+  # or pasted. Measured on the same scene: 0.30 (1 real step) left a bicycle
+  # floating on water with a hard cut edge; 0.55 (5 real steps) gave it contact
+  # with the riverbed, a reflection, and the scene's warm light, with the
+  # composition still exactly where it was placed. Past ~0.70 the object starts
+  # duplicating and drifting, and by 0.85 it had moved and shrunk.
+  #
+  # CFG is not the lever: the Hyper LoRA is distilled for guidance 1.0, and
+  # raising it to 3.0 changed almost nothing except artifact risk.
+  default_denoise: 0.55
+  default_steps: 10
   guidance_scale: 1.0
   keep_loaded: true
   # Debounce (seconds) before live OUTPUT refresh after transform.
@@ -59,7 +75,10 @@ sdxl_hyper:
   # movement stops. Export and Refine always re-render at full size first, so a
   # preview is never what gets saved.
   preview_scale: 0.625
-  preview_steps: 4
+  # 6 preview steps at denoise 0.55 gives 3 real steps, so the preview reads
+  # close to the final 5-step render instead of looking flatter than what
+  # lands a moment later. Still ~0.4s at 640px.
+  preview_steps: 6
 
 # --- Object isolation ---
 isolation:
