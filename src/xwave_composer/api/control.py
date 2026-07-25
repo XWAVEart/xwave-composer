@@ -74,6 +74,32 @@ class ImproveBody(BaseModel):
         default=None, description='"layer", "output", or null to choose automatically.'
     )
     apply: bool = Field(default=False, description="Write the improved prompt straight back.")
+    regenerate: bool = Field(
+        default=False,
+        description="Apply the improved prompt AND regenerate the target in the same "
+        "call, so one press goes from critique to a new image. Implies apply.",
+    )
+
+
+class EnhanceBody(BaseModel):
+    prompt: str
+    kind: str = Field(default="sticker", description='"sticker" or "backdrop".')
+
+
+class BackdropRef(BaseModel):
+    id: str
+
+
+class ReorderBody(BaseModel):
+    ids: list[str] = Field(description="Layer ids bottom-to-top draw order.")
+
+
+class StyleBody(BaseModel):
+    name: str | None = Field(default=None, description="Preset name, or null to clear.")
+
+
+class TimelineGoto(BaseModel):
+    index: int
 
 
 class ApplyBody(BaseModel):
@@ -93,6 +119,7 @@ def _layer_view(obj: Any) -> dict[str, Any]:
         "prompt": obj.prompt,
         "prompt_enabled": obj.prompt_enabled,
         "has_image": obj.image is not None,
+        "rev": obj.rev,
         "x": t.x,
         "y": t.y,
         "scale_x": t.scale_x,
@@ -107,12 +134,26 @@ def _state(session: ComposerSession) -> dict[str, Any]:
     doc = session.doc
     vram = vram_stats()
     improve = session.last_improve
+    timeline = session.timeline_view()
     return {
         "status": session.status,
         "canvas": {"width": doc.width, "height": doc.height},
         "background": {
             "prompt": doc.background_prompt,
             "has_image": doc.background is not None,
+            "rev": session.background_rev,
+        },
+        "backdrops": [
+            {
+                "id": b["id"],
+                "prompt": b["prompt"],
+                "active": b["id"] == session.active_backdrop_id,
+            }
+            for b in session.backdrops
+        ],
+        "timeline": {
+            "pos": timeline["pos"],
+            "count": len(timeline["entries"]),
         },
         # Bottom-to-top draw order, which is also the order the compositor uses.
         "layers": [_layer_view(o) for o in doc.objects],
@@ -211,7 +252,8 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
     def regenerate(body: StickerBody) -> dict[str, Any]:
         """Re-run generation into the selected layer, keeping its id and pose."""
         _require_models(session)
-        session.push_history()
+        # generate_selected pushes its own history; pushing here too would put
+        # two identical snapshots on the stack and make one Ctrl+Z do nothing.
         session.generate_selected(
             body.prompt,
             isolation_prompt=body.isolation_prompt,
@@ -289,7 +331,28 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
         result = session.improve(
             user_notes=body.notes, edit_mode=body.edit_mode, target=body.target
         )
-        applied = session.apply_improved() if (body.apply and result.ok) else None
+        applied = None
+        if result.ok and (body.apply or body.regenerate):
+            # apply_improved pushes history, so the wording change is undoable
+            # whether the target was a sticker prompt or the OUTPUT prompt.
+            applied = session.apply_improved()
+        if result.ok and body.regenerate:
+            # In-situ: carry the improvement through to a new image in the same
+            # call, so one press goes critique -> prompt -> regenerated result.
+            target_key = session.last_improve_target
+            if target_key.startswith("layer:"):
+                layer_id = target_key.split(":", 1)[1]
+                obj = session.doc.find_by_id(layer_id)
+                if obj is not None:
+                    session.select_layer_id(layer_id)
+                    session.generate_selected(
+                        obj.prompt,
+                        isolation_prompt=obj.isolation_prompt,
+                        # Honour how this layer was made. Defaulting to True
+                        # would silently turn a full-image layer into a cutout.
+                        isolate=obj.cutout,
+                    )
+            session.run_output(session.refresh_work())
         return {
             "ok": result.ok,
             "looked_at": looked_at,
@@ -321,6 +384,61 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
                 for it in session.improve_iterations()
             ],
         }
+
+    @router.post("/enhance")
+    def enhance(body: EnhanceBody) -> dict[str, Any]:
+        # Needs only the LLM, not the diffusion stack, so no _require_models.
+        enhanced = session.enhance_prompt(body.prompt, kind=body.kind)
+        # ok distinguishes "the model looked and left it alone" from "the model
+        # never ran". Both return the original text, and blaming the user's
+        # wording for an LLM crash is worse than saying nothing.
+        return {
+            "enhanced": enhanced,
+            "changed": enhanced.strip() != body.prompt.strip(),
+            "ok": not session.last_enhance_failed,
+            "status": session.status,
+        }
+
+    @router.post("/backdrop")
+    def switch_backdrop(body: BackdropRef) -> dict[str, Any]:
+        # The library evicts past BACKDROP_LIMIT, so a client can legitimately
+        # hold a stale id. Say so rather than returning 200 for a no-op.
+        if not any(b["id"] == body.id for b in session.backdrops):
+            raise HTTPException(status_code=404, detail=f"No backdrop {body.id}.")
+        session.set_background(body.id)
+        return {"state": _state(session)}
+
+    @router.post("/backdrop/remove")
+    def remove_backdrop(body: BackdropRef) -> dict[str, Any]:
+        session.remove_backdrop(body.id)
+        return {"state": _state(session)}
+
+    @router.post("/reorder")
+    def reorder(body: ReorderBody) -> dict[str, Any]:
+        session.reorder_layers([str(i) for i in body.ids])
+        return {"state": _state(session)}
+
+    @router.get("/styles")
+    def styles() -> dict[str, Any]:
+        mgr = session.styles
+        return {
+            "styles": mgr.names() if mgr else [],
+            "active": mgr.active_name if mgr else None,
+        }
+
+    @router.post("/style")
+    def set_style(body: StyleBody) -> dict[str, Any]:
+        session.apply_style_preset(body.name)
+        return {"state": _state(session)}
+
+    @router.get("/timeline")
+    def timeline() -> dict[str, Any]:
+        return session.timeline_view()
+
+    @router.post("/timeline/goto")
+    def timeline_goto(body: TimelineGoto) -> dict[str, Any]:
+        session.timeline_goto(body.index)
+        return {"state": _state(session)}
 
     @router.post("/export")
     def export(body: ExportBody) -> dict[str, Any]:
@@ -364,6 +482,13 @@ def register_control_api(app: Any, session: ComposerSession) -> APIRouter:
         if obj is None or obj.image is None:
             raise HTTPException(status_code=404, detail=f"No image on layer {layer_id}.")
         return _png(obj.image)
+
+    @router.get("/render/backdrop/{backdrop_id}.png")
+    def render_backdrop(backdrop_id: str) -> Response:
+        entry = next((b for b in session.backdrops if b["id"] == backdrop_id), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"No backdrop {backdrop_id}.")
+        return _png(entry["image"])
 
     app.include_router(router)
 

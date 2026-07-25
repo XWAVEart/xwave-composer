@@ -119,10 +119,14 @@ Everything below describes the full set of controls, i.e. Advanced mode.
 | | |
 |---|---|
 | click an object | selects it — transparent pixels fall through to whatever is behind |
-| drag / corner handles / orange handle | move / stretch / rotate |
+| drag / corner handles / orange handle | move / stretch / rotate (`Shift` snaps rotation to 15°) |
+| mouse wheel over the canvas | scale the selected sticker |
 | arrows, `Shift`+arrows | nudge 1px / 10px (a burst is one undo step) |
+| `[` / `]` | push the selected sticker back / bring it forward |
 | `Ctrl`+`Z`, `Ctrl`+`Shift`+`Z` | undo / redo, including undeleting a layer with its cutout |
 | `Delete` | remove the selected layer |
+| `Ctrl`+`E` in the prompt field | enhance the prompt (studio) |
+| double-click a sticker chip | remake it: its prompt loads into the bar, Make regenerates in place |
 
 Pointer events are used throughout, so pen and touch work the same as a mouse.
 
@@ -153,12 +157,33 @@ loads **Qwen2.5-VL-3B-Instruct** and sends it the concatenated prompt (style pre
 included) plus the current WORK canvas image. The model rewrites the prompt for SDXL and
 transfers only the image's composition (framing, camera angle, subject placement).
 
+## Studio niceties
+
+- **Enhance (✦ / Ctrl+E)** — expands a naive prompt into a detailed one, in the same
+  field, using the local vision LLM. Sticker mode keeps it to one isolated object;
+  backdrop mode writes a full scene. Your original wording is one native Ctrl+Z away.
+- **Backdrop library** — every backdrop you generate stays on the shelf as an asset.
+  Click one to swap it in behind the composition (undoable); × removes it from the
+  shelf without touching the composition.
+- **Timeline** — a slider above the shelf scrubs through every state the composition
+  has been in, one entry per step ("backdrop: …", "sticker: …", "moved…"). It is an
+  append-only chronology: editing after scrubbing back appends rather than erasing,
+  so nothing you made is ever lost. Scrubbing is itself undoable.
+- **Look picker** — the style presets from the CSV, applied to the result with one
+  dropdown.
+
 ## Improve loop
 
 Press **✧ Improve** and the vision model looks at what you just made, says what is wrong
 with it, and writes a better prompt. Optionally tell it what *you* think is wrong first —
 your notes outrank its own reading of the image. The proposed prompt lands in an editable
 box, so you can adjust the wording before pressing **Use this**.
+
+In the studio the default target is **the scene** — the composed OUTPUT — because notes
+are usually about the whole picture; switch to **Selected sticker** to iterate on one
+element. The primary button, **✦ Improve it**, does the whole loop in one press: look,
+critique, rewrite the prompt, apply it, and regenerate the image, with one Ctrl+Z
+reverting prompt and pixels together. "Just look" keeps the two-step manual path.
 
 Two modes:
 
@@ -184,7 +209,10 @@ python xwave.py background "an empty misty lake at dawn"
 python xwave.py sticker    "a small wooden rowboat"    # prints the new layer id
 python xwave.py place --x 300 --y 700 --scale 0.4
 python xwave.py refine
-python xwave.py improve --notes "the boat is too small" --apply
+python xwave.py enhance "a rowboat"                    # naive idea -> rich prompt
+python xwave.py improve --notes "the boat is too small" --fix   # critique + regenerate
+python xwave.py timeline                               # every state so far
+python xwave.py goto 3                                 # scrub back to step 3
 python xwave.py save out.png
 python xwave.py export                                 # 2x via SeedVR2
 

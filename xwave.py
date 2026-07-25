@@ -164,6 +164,20 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="What to look at. Default: the selected layer, else the OUTPUT.",
     )
+    p.add_argument(
+        "--fix",
+        action="store_true",
+        help="One-shot: apply the improved prompt AND regenerate the target.",
+    )
+
+    p = sub.add_parser("enhance", help="Expand a short idea into a rich prompt")
+    p.add_argument("prompt")
+    p.add_argument("--kind", choices=("sticker", "backdrop"), default="sticker")
+
+    sub.add_parser("timeline", help="Show every state the composition has been in")
+
+    p = sub.add_parser("goto", help="Scrub the composition to a timeline step")
+    p.add_argument("index", type=int)
 
     sub.add_parser("apply", help="Apply the last improved prompt")
     sub.add_parser("history", help="Show improve iterations")
@@ -257,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
                     "edit_mode": args.edit,
                     "apply": args.apply,
                     "target": args.target,
+                    "regenerate": args.fix,
                 },
             )
             if args.json:
@@ -280,6 +295,19 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "apply":
             result = post(base, "/improve/apply")
             print(result.get("message", ""))
+
+        elif args.cmd == "enhance":
+            result = post(base, "/enhance", {"prompt": args.prompt, "kind": args.kind})
+            print(result.get("enhanced", args.prompt))
+
+        elif args.cmd == "timeline":
+            data = call(base, "/timeline")
+            pos = data.get("pos", -1)
+            for i, label in enumerate(data.get("entries", [])):
+                print(f"{'>' if i == pos else ' '} {i:3d}  {label}")
+
+        elif args.cmd == "goto":
+            report(post(base, "/timeline/goto", {"index": args.index}), args.json)
 
         elif args.cmd == "history":
             data = call(base, "/improve/history")

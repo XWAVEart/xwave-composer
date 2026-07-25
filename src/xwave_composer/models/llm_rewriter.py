@@ -87,6 +87,34 @@ CRITIQUE_EDIT_SYSTEM = (
 )
 
 
+ENHANCE_STICKER_SYSTEM = (
+    "You are an expert image-generation prompt writer.\n"
+    "The user gives a short idea for ONE object. Expand it into a rich prompt for "
+    "generating that single object by itself.\n"
+    "Rules:\n"
+    "- ONE object only. No scene, no background, no environment, no second subject — "
+    "the pipeline isolates the object and places it into a scene later.\n"
+    "- Add concrete visual detail: materials, colors, texture, condition, era, finish, "
+    "lighting on the object, camera angle.\n"
+    "- Keep the user's subject and intent exactly; enrich, never replace.\n"
+    "- 25 to 50 words, one line of comma-separated phrases.\n"
+    "- Output ONLY the prompt. No quotes, no preamble, no explanations."
+)
+
+ENHANCE_BACKDROP_SYSTEM = (
+    "You are an expert image-generation prompt writer.\n"
+    "The user gives a short idea for a SCENE. Expand it into a rich backdrop prompt.\n"
+    "Rules:\n"
+    "- A full environment: setting, time of day, weather, light quality and direction, "
+    "atmosphere, palette, depth from foreground to horizon, composition.\n"
+    "- No single dominant foreground subject — objects are added separately as layers "
+    "on top of this backdrop.\n"
+    "- Keep the user's setting and mood exactly; enrich, never replace.\n"
+    "- 30 to 60 words, one line of comma-separated phrases.\n"
+    "- Output ONLY the prompt. No quotes, no preamble, no explanations."
+)
+
+
 @dataclass
 class ImproveIteration:
     """One pass of the improve loop, kept as context for the next pass."""
@@ -138,6 +166,38 @@ def _parse_critique_json(text: str) -> tuple[str, str] | None:
         if critique and improved:
             return str(critique).strip(), str(improved).strip()
     return None
+
+
+def _clean_enhanced(raw: str, fallback: str) -> str:
+    """Normalise an enhance response to one usable prompt line."""
+    result = (raw or "").strip()
+    for prefix in ("Prompt:", "prompt:", "Enhanced prompt:", "Here is the prompt:", "Assistant:"):
+        if result.startswith(prefix):
+            result = result[len(prefix):].strip()
+
+    # A small model often writes a lead-in, a blank line, then the prompt.
+    # Taking the first paragraph blindly returned the lead-in and discarded the
+    # real answer. Only a trailing colon is a safe signal: judging by length
+    # instead also ate genuine short prompts ("weathered oak barrel, iron
+    # hoops, damp cellar light"). Everything after the first kept paragraph is
+    # commentary and is dropped.
+    paragraphs = [p.strip() for p in result.split("\n\n") if p.strip()]
+    while len(paragraphs) > 1 and paragraphs[0].endswith(":"):
+        paragraphs.pop(0)
+    result = paragraphs[0] if paragraphs else ""
+
+    if result.startswith('"') and result.endswith('"'):
+        result = result[1:-1].strip()
+    result = " ".join(result.split())
+    if not result or result.casefold() == fallback.casefold():
+        return fallback
+    if len(result) > 600:
+        # Cut at a phrase boundary rather than mid-word.
+        clipped = result[:600]
+        if "," in clipped:
+            clipped = clipped.rsplit(",", 1)[0]
+        result = clipped.strip(" ,")
+    return result
 
 
 class PromptRewriter:
@@ -373,6 +433,47 @@ class PromptRewriter:
             restored = f"{style_prefix.strip()} {result.strip()}".strip()
             return restored[:420].strip(" ,")
         return text
+
+    def enhance(self, text: str, kind: str = "sticker") -> str:
+        """Expand a short idea into a detailed prompt. Text-only, no image.
+
+        Returns the original text unchanged when the model produces nothing
+        usable, so the caller can always put the result straight back into the
+        prompt field.
+        """
+        src = (text or "").strip()
+        if not src:
+            return src
+        self.ensure_loaded()
+        assert self.model is not None and self.processor is not None
+
+        system = ENHANCE_BACKDROP_SYSTEM if kind == "backdrop" else ENHANCE_STICKER_SYSTEM
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": [{"type": "text", "text": src}]},
+        ]
+        chat = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.processor(text=[chat], images=None, return_tensors="pt", padding=True)
+        device = next(self.model.parameters()).device
+        inputs = {
+            key: value.to(device) if hasattr(value, "to") else value
+            for key, value in inputs.items()
+        }
+        prompt_length = int(inputs["input_ids"].shape[-1])
+        try:
+            with torch.inference_mode():
+                out = self.model.generate(**inputs, max_new_tokens=160, do_sample=False)
+        except torch.OutOfMemoryError:
+            if str(self._runtime_device or "").startswith("cuda"):
+                logger.warning("Enhance OOM — reloading the LLM on CPU")
+                self.unload()
+                self.load(force=True, prefer_device="cpu")
+                return self.enhance(text, kind=kind)
+            return src
+        result = self.processor.decode(out[0, prompt_length:], skip_special_tokens=True)
+        return _clean_enhanced(result, src)
 
     def critique(
         self,

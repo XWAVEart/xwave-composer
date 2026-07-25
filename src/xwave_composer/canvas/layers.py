@@ -57,11 +57,19 @@ class ObjectLayer:
 
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:10])
     name: str = "Object"
+    # Bumped whenever the layer's image content changes (generate, import,
+    # re-cut, history restore). Clients use it to cache-bust thumbnails: the
+    # render routes send no caching headers, so an unchanging URL is reused
+    # from the browser's heuristic cache even after the pixels changed.
+    rev: int = 0
     prompt: str = ""
     # Muting excludes this text from OUTPUT prompt construction while leaving
     # the visual layer untouched on the WORK canvas.
     prompt_enabled: bool = True
     isolation_prompt: str = "isolated object on plain white background"
+    # Whether this layer was cut out. Regeneration must honour it: re-running a
+    # full-image layer through isolation would silently turn it into a cutout.
+    cutout: bool = True
     # RGBA image with transparent background
     image: Image.Image | None = None
     # Raw generation before isolation (for SAM2 click re-run)
