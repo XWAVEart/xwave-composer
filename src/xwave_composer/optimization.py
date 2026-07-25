@@ -61,6 +61,27 @@ class ComputeCapabilities:
     torchao: bool
     mslk: bool
 
+    @staticmethod
+    def _importable(name: str) -> bool:
+        """Report whether a module both exists and actually imports.
+
+        find_spec() only locates a module, it does not execute it. That is not
+        enough for these two: MSLK publishes a Python-only wheel for some
+        platforms (win_amd64) that contains no compiled library, and its
+        __init__ then calls torch.ops.load_library("mslk.so") on a file the
+        wheel never shipped. With CUDA present it re-raises, so the package is
+        findable but unusable, and a find_spec check reports NVFP4 as supported
+        right up until the quantization call fails.
+        """
+        if importlib.util.find_spec(name) is None:
+            return False
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001 - any import failure means unusable
+            logger.warning("%s is installed but does not import: %s", name, exc)
+            return False
+        return True
+
     @classmethod
     def detect(cls) -> "ComputeCapabilities":
         cuda = torch.cuda.is_available()
@@ -71,8 +92,8 @@ class ComputeCapabilities:
             device_name=device_name,
             capability=capability,
             blackwell=cuda and capability >= (10, 0),
-            torchao=importlib.util.find_spec("torchao") is not None,
-            mslk=importlib.util.find_spec("mslk") is not None,
+            torchao=cls._importable("torchao"),
+            mslk=cls._importable("mslk"),
         )
 
     def supports(self, profile: ComputeProfile) -> tuple[bool, str]:

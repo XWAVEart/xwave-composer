@@ -82,9 +82,12 @@ class SDXLHyperPipeline:
             )
         # Some fine-tune repos (e.g. Juggernaut XL v9) only ship fp16-variant
         # weight files, so try both variants before giving up.
+        # Try fp16 first: weights are cast to self.dtype (bfloat16) anyway, so the
+        # fp32 files cost ~2x download and disk for precision that is discarded.
+        # Repos without an fp16 variant still fall through to the default files.
         errors: list[str] = []
         for loader in (AutoPipelineForImage2Image, StableDiffusionXLImg2ImgPipeline):
-            for variant in (None, "fp16"):
+            for variant in ("fp16", None):
                 try:
                     return loader.from_pretrained(
                         ref,

@@ -20,3 +20,6 @@ models/**
 .env
 *.log
 .DS_Store
+# TorchInductor writes thousands of generated kernels here (app.py points it
+# at the project so the cache survives temp cleaning).
+.cache/

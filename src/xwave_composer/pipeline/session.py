@@ -6,8 +6,11 @@ import hashlib
 import logging
 import random
 import threading
-from dataclasses import dataclass, field
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -17,7 +20,7 @@ from xwave_composer.config import AppConfig
 from xwave_composer.device import empty_cache, gpu_summary
 from xwave_composer.models.flux_generator import FluxGenerator
 from xwave_composer.models.isolation import ObjectIsolator
-from xwave_composer.models.llm_rewriter import PromptRewriter
+from xwave_composer.models.llm_rewriter import ImproveIteration, ImproveResult, PromptRewriter
 from xwave_composer.models.sdxl_hyper import SDXLHyperPipeline
 from xwave_composer.models.upscaler import ImageUpscaler
 from xwave_composer.optimization import (
@@ -28,6 +31,19 @@ from xwave_composer.optimization import (
 from xwave_composer.style.style_manager import StyleManager, build_output_prompt
 
 logger = logging.getLogger(__name__)
+
+# How many composition states to keep for undo. Snapshots hold references to
+# the existing ObjectLayer objects rather than copies of their images, so the
+# cost per entry is small.
+HISTORY_LIMIT = 40
+
+# The timeline is an append-only log of every state the composition has been
+# in, one entry per completed step, scrubbable from the UI. Entries share
+# image references with the layers, so the cap bounds bookkeeping, not pixels.
+TIMELINE_LIMIT = 200
+
+# Backdrops accumulate as reusable assets; cap the library, oldest out.
+BACKDROP_LIMIT = 24
 
 
 @dataclass
@@ -70,6 +86,9 @@ class ComposerSession:
     last_work: Image.Image | None = None
     last_output: Image.Image | None = None
     last_output_prompt: str = ""
+    # True when last_output came from the fast low-resolution preview pass, so
+    # anything that ships a final image must re-render at full quality first.
+    output_is_preview: bool = False
     last_concat_prompt: str = ""
     _rewrite_cache_key: str = ""
     _rewrite_cache_result: str = ""
@@ -84,6 +103,30 @@ class ComposerSession:
     # image and the isolation prompt is cleared / unused.
     layer_cutout: bool = True
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    # Serialises the single shared vision model between enhance and critique,
+    # separate from _lock so LLM work never blocks status polling.
+    _llm_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    last_enhance_failed: bool = False
+    _undo_stack: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    _redo_stack: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # >0 while a multi-step operation is being grouped into one undo entry.
+    _history_depth: int = field(default=0, repr=False)
+    # Improve loop: per-target {"concept": str, "iterations": [ImproveIteration]}
+    improve_history: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+    last_improve: ImproveResult | None = field(default=None, repr=False)
+    last_improve_target: str = ""
+    # Backdrop library: every generated backdrop is kept as a reusable asset
+    # [{"id", "prompt", "image"}], separate from which one the document shows.
+    backdrops: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    active_backdrop_id: str = ""
+    # Bumped whenever doc.background content changes, for thumbnail cache-busting.
+    background_rev: int = 0
+    # Append-only log of composition states: [{"label", "snap"}]. The slider in
+    # the studio scrubs over it. It never truncates on branch — editing after
+    # scrubbing back simply appends the new state, so the log stays a complete
+    # chronology of everything the composition has been.
+    _timeline: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    _timeline_pos: int = field(default=-1, repr=False)
 
     def __post_init__(self) -> None:
         self.config.ensure_dirs()
@@ -110,6 +153,10 @@ class ComposerSession:
         self.output_settings.use_llm_rewrite = bool(
             self.config.get("llm", "enabled_by_default", default=False)
         )
+        # Seed the timeline with the blank canvas so the slider can always
+        # scrub back to before the first step.
+        self._timeline.append({"label": "start", "snap": self._snapshot()})
+        self._timeline_pos = 0
 
     # ------------------------------------------------------------------ models
     def preload_core(self) -> str:
@@ -132,6 +179,17 @@ class ComposerSession:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("SAM2 unavailable: %s", exc)
                 parts.append("SAM2 ✗ (rembg fallback)")
+        # With keep_loaded set, the vision model is going to be resident for the
+        # whole session anyway, so pay its multi-minute disk load here with the
+        # other models rather than the first time someone presses Enhance and
+        # watches a button do nothing.
+        if bool(self.config.get("llm", "keep_loaded", default=False)):
+            try:
+                self.llm.load()
+                parts.append("prompt LLM ✓")
+            except Exception as exc:  # noqa: BLE001 - optional; never block startup
+                logger.warning("Prompt LLM preload failed: %s", exc)
+                parts.append("prompt LLM ✗ (loads on first use)")
         try:
             self.isolator.load_rembg()
             parts.append("rembg ✓")
@@ -220,12 +278,47 @@ class ComposerSession:
                 height=self.doc.height,
                 seed=seed if seed >= 0 else None,
             )
+            self.push_history()
             self.doc.background = img
             self.doc.background_prompt = prompt
+            self.background_rev += 1
+            # Every generated backdrop joins the library as a reusable asset;
+            # generating a new one no longer silently discards the last.
+            bid = uuid.uuid4().hex[:8]
+            self.backdrops.append({"id": bid, "prompt": prompt, "image": img})
+            del self.backdrops[:-BACKDROP_LIMIT]
+            self.active_backdrop_id = bid
             self._save_layer_image(img, "background")
             self.last_work = compose_work_image(self.doc)
             self.status = "Background ready."
+            self.record(f"backdrop: {prompt[:44]}")
             return self.last_work
+
+    def set_background(self, backdrop_id: str) -> Image.Image:
+        """Make a library backdrop the active one."""
+        with self._lock:
+            entry = next((b for b in self.backdrops if b["id"] == backdrop_id), None)
+            if entry is None:
+                self.status = "That backdrop is no longer in the library."
+                return self.refresh_work()
+            self.push_history()
+            self.doc.background = entry["image"]
+            self.doc.background_prompt = entry["prompt"]
+            self.background_rev += 1
+            self.active_backdrop_id = backdrop_id
+            self.last_work = compose_work_image(self.doc)
+            self.status = f"Backdrop: {entry['prompt'][:44]}"
+            self.record(f"backdrop → {entry['prompt'][:40]}")
+            return self.last_work
+
+    def remove_backdrop(self, backdrop_id: str) -> None:
+        """Drop a backdrop from the library. The composition keeps whatever it
+        currently shows — this is shelf management, not an edit."""
+        with self._lock:
+            self.backdrops = [b for b in self.backdrops if b["id"] != backdrop_id]
+            if self.active_backdrop_id == backdrop_id:
+                self.active_backdrop_id = ""
+            self.status = "Backdrop removed from the library."
 
     def generate_object_raw(
         self,
@@ -296,6 +389,7 @@ class ComposerSession:
             rgba = self.pending_raw.convert("RGBA")
             backend = f"{backend}+opaque_fallback"
 
+        self.push_history()
         layer = ObjectLayer(
             name=f"Object {len(self.doc.objects) + 1}",
             prompt=self.pending_prompt,
@@ -347,15 +441,18 @@ class ComposerSession:
             self.pending_isolation_prompt = isolation_prompt
             if isolate:
                 return self._isolate_pending_unlocked(prefer=prefer)
+            self.push_history()
             layer = ObjectLayer(
                 name=f"Object {len(self.doc.objects) + 1}",
                 prompt=prompt,
                 isolation_prompt=isolation_prompt,
+                cutout=False,
                 image=image.convert("RGBA"),
                 raw_image=image.convert("RGB"),
             )
             self.doc.add_object(layer)
             self.last_work = compose_work_image(self.doc)
+            self.record(f"added {layer.name}")
             return self.last_work
 
     def import_into_selected(
@@ -377,6 +474,8 @@ class ComposerSession:
             if mode not in ("rembg", "sam2", "none"):
                 mode = "none"
 
+            self.push_history()
+
             # Background: always full-bleed to canvas size
             if self.doc.selected_id == "__bg__":
                 bg = raw.resize((self.doc.width, self.doc.height), Image.Resampling.LANCZOS)
@@ -385,9 +484,21 @@ class ComposerSession:
                     self.doc.background_prompt = prompt.strip()
                 elif not self.doc.background_prompt:
                     self.doc.background_prompt = "imported background"
+                # An imported backdrop is a backdrop like any other: it joins
+                # the library, bumps the rev so clients refetch, and lands on
+                # the timeline. Skipping any of these left the studio drawing
+                # the previous backdrop indefinitely.
+                self.background_rev += 1
+                bid = uuid.uuid4().hex[:8]
+                self.backdrops.append(
+                    {"id": bid, "prompt": self.doc.background_prompt, "image": bg}
+                )
+                del self.backdrops[:-BACKDROP_LIMIT]
+                self.active_backdrop_id = bid
                 self._save_layer_image(bg, "background")
                 self.last_work = compose_work_image(self.doc)
                 self.status = "Background imported."
+                self.record("imported backdrop")
                 return self.last_work
 
             # Ensure an object layer exists
@@ -421,6 +532,8 @@ class ComposerSession:
             first_image = obj.image is None
             obj.image = rgba
             obj.raw_image = raw.copy()
+            obj.cutout = mode != "none"
+            obj.rev += 1
             if first_image:
                 max_dim = max(rgba.width, rgba.height, 1)
                 target = min(self.doc.width, self.doc.height) * 0.45
@@ -453,11 +566,13 @@ class ComposerSession:
         with self._lock:
             sid = self.doc.selected_id
             if sid in (None, "__bg__"):
+                # Delegates, and generate_background pushes its own history.
                 return self.generate_background(prompt, seed=seed)
             obj = self.doc.selected()
             if obj is None:
                 return self.generate_background(prompt, seed=seed)
 
+            self.push_history()
             self.status = "Generating object with Flux…"
             if isolate:
                 iso = (isolation_prompt or obj.isolation_prompt or "").strip()
@@ -497,8 +612,10 @@ class ComposerSession:
             first_image = obj.image is None
             obj.prompt = prompt
             obj.isolation_prompt = iso
+            obj.cutout = bool(isolate)
             obj.image = rgba
             obj.raw_image = raw.copy()
+            obj.rev += 1
             if first_image:
                 # Fit so a new object doesn't cover the whole canvas.
                 max_dim = max(rgba.width, rgba.height, 1)
@@ -510,6 +627,9 @@ class ComposerSession:
             self._save_layer_image(rgba, f"object_{obj.id}")
             self.last_work = compose_work_image(self.doc)
             self.status = f"Layer generated via {backend}."
+            self.record(
+                f"{'sticker' if first_image else 'remade'}: {prompt[:44]}"
+            )
             return self.last_work
 
     def reisolate_selected(
@@ -522,12 +642,15 @@ class ComposerSession:
             if obj is None or obj.raw_image is None:
                 self.status = "Select an object that has a raw image."
                 return self.last_work
+            self.push_history()
             rgba, backend = self.isolator.isolate(
                 obj.raw_image, click_xy=click_xy, prefer=prefer
             )
             obj.image = rgba
+            obj.rev += 1
             self.last_work = compose_work_image(self.doc)
             self.status = f"Re-isolated via {backend}."
+            self.record("re-cut")
             return self.last_work
 
     # ------------------------------------------------------------------ canvas
@@ -649,6 +772,7 @@ class ComposerSession:
             if source is None:
                 self.status = "Select an object layer to duplicate."
                 return self.last_work or compose_work_image(self.doc)
+            self.push_history()
             duplicate = ObjectLayer(
                 name=f"{source.name} copy",
                 prompt=source.prompt,
@@ -675,6 +799,7 @@ class ComposerSession:
                 )
             self.last_work = compose_work_image(self.doc)
             self.status = f"Duplicated {source.name or source.id}."
+            self.record(f"duplicated {source.name or source.id}")
             return self.last_work
 
     def toggle_selected_prompt(self) -> bool | None:
@@ -721,6 +846,21 @@ class ComposerSession:
             )
             if self.styles:
                 self.styles.set_active(None)
+            # A reset is a fresh start: history, timeline and the backdrop
+            # library all go, or stale references keep old sessions alive.
+            self._undo_stack.clear()
+            self._redo_stack.clear()
+            self.backdrops.clear()
+            self.active_backdrop_id = ""
+            self.background_rev += 1
+            # Improve anchors each target's critiques to the first prompt it
+            # ever saw. Carrying that across a reset judges the new composition
+            # against the old one's concept.
+            self.improve_history.clear()
+            self.last_improve = None
+            self.last_improve_target = ""
+            self._timeline = [{"label": "start", "snap": self._snapshot()}]
+            self._timeline_pos = 0
             self.last_work = compose_work_image(self.doc)
             self.last_output = None
             self.last_output_prompt = ""
@@ -804,6 +944,7 @@ class ComposerSession:
 
     def rename_layer(self, layer_id: str, name: str) -> Image.Image:
         with self._lock:
+            self.push_history()
             self.doc.rename(layer_id, name)
             self.status = f"Renamed layer to '{name.strip()}'."
             return self.refresh_work()
@@ -812,8 +953,10 @@ class ComposerSession:
         with self._lock:
             lid = layer_id or self.doc.selected_id
             if lid:
+                self.push_history()
                 self.doc.remove_object(lid)
-                self.status = f"Deleted layer {lid}."
+                self.status = f"Deleted layer {lid}. Ctrl+Z to restore."
+                self.record(f"deleted {lid[:10]}")
             self.last_work = compose_work_image(self.doc)
             return self.last_work
 
@@ -829,10 +972,474 @@ class ComposerSession:
 
     def reorder_layers(self, ordered_ids: list[str]) -> Image.Image:
         with self._lock:
+            self.push_history()
             self.doc.reorder_by_ids(ordered_ids)
             self.last_work = compose_work_image(self.doc)
             self.status = "Layer order updated."
+            self.record("reordered layers")
             return self.last_work
+
+    # ------------------------------------------------------------------ improve
+    def _improve_target(
+        self, edit_mode: bool, want: str | None = None
+    ) -> tuple[str, str] | None:
+        """Pick what to critique: ("layer:<id>", ...) or ("output", ...).
+
+        ``want`` forces the choice. Without it the selected layer wins, which
+        is right when iterating on one sticker but surprising when the user is
+        talking about the whole picture -- so callers surface the target.
+        """
+        if want == "output":
+            if self.last_output is None:
+                return None
+            return "output", "edit" if edit_mode else "concept"
+        if want == "layer":
+            obj = self.doc.selected()
+            if obj is None or obj.image is None:
+                return None
+            return f"layer:{obj.id}", "layer"
+        if edit_mode:
+            # Editing means refining the picture that exists, and the only true
+            # image-to-image stage here is the OUTPUT refine over the WORK
+            # composite. That gives the critic a real before and after.
+            if self.last_work is None or self.last_output is None:
+                return None
+            return "output", "edit"
+        obj = self.doc.selected()
+        if obj is not None and obj.image is not None:
+            return f"layer:{obj.id}", "layer"
+        if self.last_output is not None:
+            return "output", "concept"
+        return None
+
+    @staticmethod
+    def _flatten(image: Image.Image) -> Image.Image:
+        """Cut-outs are mostly transparent; show the critic a real picture."""
+        if image.mode != "RGBA":
+            return image.convert("RGB")
+        flat = Image.new("RGB", image.size, (255, 255, 255))
+        flat.paste(image, mask=image.getchannel("A"))
+        return flat
+
+    def improve_target_label(self, edit_mode: bool = False, want: str | None = None) -> str:
+        """Human-readable description of what Improve would look at right now."""
+        picked = self._improve_target(edit_mode, want)
+        if picked is None:
+            return "nothing yet"
+        key, _ = picked
+        if key == "output":
+            return "the composed OUTPUT"
+        obj = self.doc.find_by_id(key.split(":", 1)[1])
+        prompt = (obj.prompt if obj else "")[:40]
+        return f"the '{prompt}' layer" if prompt else "the selected layer"
+
+    def improve(
+        self, *, user_notes: str = "", edit_mode: bool = False, target: str | None = None
+    ) -> ImproveResult:
+        """Critique the current image and propose a better prompt.
+
+        Concept mode rewrites the whole prompt for the selected layer. Edit mode
+        compares the WORK composite against the refined OUTPUT and rewrites the
+        OUTPUT prompt as edit instructions, so iterations refine the picture in
+        front of you instead of starting a new one.
+        """
+        with self._lock:
+            picked = self._improve_target(edit_mode, target)
+            if picked is None:
+                msg = (
+                    "Edit mode needs a refined OUTPUT to compare against."
+                    if edit_mode
+                    else "Generate a layer or an OUTPUT first."
+                )
+                self.last_improve = ImproveResult(ok=False, error=msg)
+                self.status = msg
+                return self.last_improve
+
+            key, kind = picked
+            entry = self.improve_history.setdefault(key, {"concept": "", "iterations": []})
+
+            if kind == "layer":
+                obj = self.doc.selected()
+                assert obj is not None and obj.image is not None
+                current_prompt = obj.prompt
+                result_image = self._flatten(obj.image)
+                base_image = None
+            else:
+                current_prompt = (
+                    self.output_settings.custom_prompt
+                    if self.output_settings.prompt_locked
+                    else self.build_prompt()
+                )
+                assert self.last_output is not None
+                result_image = self._flatten(self.last_output)
+                base_image = self._flatten(self.last_work) if edit_mode else None
+
+            # The first prompt seen for a target is the concept, and it stays the
+            # yardstick so later passes cannot drift away from what was asked for.
+            if not entry["concept"]:
+                entry["concept"] = current_prompt
+
+            self.status = "Looking at the image…"
+
+        # Generation is slow and does not touch shared state, so the session
+        # lock stays free; _llm_lock keeps enhance from unloading the model
+        # mid-critique.
+        with self._llm_lock:
+            result = self.llm.critique(
+                original_concept=entry["concept"],
+                current_prompt=current_prompt,
+                result_image=result_image,
+                base_image=base_image,
+                user_notes=user_notes,
+                history=list(entry["iterations"])[-3:],
+                edit_mode=edit_mode,
+            )
+
+        with self._lock:
+            if result.ok:
+                entry["iterations"].append(
+                    ImproveIteration(
+                        n=len(entry["iterations"]) + 1,
+                        critique=result.critique,
+                        improved_prompt=result.improved_prompt,
+                        user_notes=user_notes,
+                    )
+                )
+                self.status = f"Improve pass {len(entry['iterations'])} ready."
+            else:
+                self.status = result.error or "Improve failed."
+            self.last_improve = result
+            self.last_improve_target = key
+        if not bool(self.config.get("llm", "keep_loaded", default=False)):
+            # Under _llm_lock, not the session lock: a concurrent enhance must
+            # not be able to unload the model between these two statements.
+            with self._llm_lock:
+                self.llm.unload()
+                empty_cache()
+        return result
+
+    def apply_improved(self, text: str | None = None) -> str:
+        """Write an improved prompt where it belongs and report where.
+
+        ``text`` lets the caller apply an edited version of what the model
+        proposed, so the user stays in charge of the final wording.
+        """
+        with self._lock:
+            result = self.last_improve
+            chosen = (text or "").strip()
+            if not chosen:
+                if result is None or not result.ok or not result.improved_prompt:
+                    self.status = "No improved prompt to apply."
+                    return self.status
+                chosen = result.improved_prompt
+            if not self.last_improve_target:
+                self.status = "Nothing has been improved yet."
+                return self.status
+            result = result or ImproveResult(ok=True, improved_prompt=chosen)
+            result.improved_prompt = chosen
+            key = self.last_improve_target
+            # Applying rewrites a layer prompt or locks a custom OUTPUT prompt;
+            # both are captured by snapshots, so both must be undoable.
+            self.push_history()
+            if key.startswith("layer:"):
+                obj = self.doc.find_by_id(key.split(":", 1)[1])
+                if obj is None:
+                    self.status = "That layer is gone."
+                    return self.status
+                obj.prompt = result.improved_prompt
+                self.status = "Improved prompt applied — press Generate."
+                self.record("improved sticker prompt")
+            else:
+                # Lock it, otherwise the auto-build would overwrite it immediately.
+                self.output_settings.custom_prompt = result.improved_prompt
+                self.output_settings.prompt_locked = True
+                self.status = "Improved OUTPUT prompt applied and locked."
+            return self.status
+
+    def improve_iterations(self, key: str | None = None) -> list[ImproveIteration]:
+        target = key or self.last_improve_target
+        entry = self.improve_history.get(target)
+        return list(entry["iterations"]) if entry else []
+
+    def enhance_prompt(self, text: str, kind: str = "sticker") -> str:
+        """Expand a short idea into a detailed generation prompt, in place.
+
+        Not recorded on the timeline: nothing about the composition changes
+        until the user actually generates with the result.
+        """
+        if not (text or "").strip():
+            # Guard here, not just in the client: otherwise an empty prompt
+            # through the API loads 7.5 GB of model to hand back an empty
+            # string.
+            return ""
+        with self._lock:
+            # Say which wait this is. Cold, the model is ~7.5 GB off disk and
+            # takes minutes; warm it is seconds. A single "Enhancing…" for both
+            # makes the first press look like the app has hung.
+            if self.llm is not None and not self.llm.ready:
+                self.status = (
+                    "Loading the language model — first use after a restart "
+                    "takes a few minutes. Later ones take seconds."
+                )
+            else:
+                self.status = "Enhancing the prompt…"
+        # One LLM instance serves enhance and critique, so serialise callers:
+        # otherwise a finishing enhance can unload the model out from under an
+        # in-flight improve. The lock is separate from the session lock so this
+        # never blocks status polling.
+        with self._llm_lock:
+            failed = False
+            try:
+                result = self.llm.enhance(text, kind=kind)
+            except Exception as exc:  # noqa: BLE001 - surface, never crash the UI
+                logger.exception("Enhance failed")
+                result = text
+                failed = True
+                with self._lock:
+                    self.status = f"Enhance failed: {exc}"
+            finally:
+                # Unload on the failure path too, or a half-initialised model
+                # sits on VRAM that Flux and SDXL need.
+                if not bool(self.config.get("llm", "keep_loaded", default=False)):
+                    try:
+                        self.llm.unload()
+                        empty_cache()
+                    except Exception:  # noqa: BLE001
+                        logger.exception("LLM unload after enhance failed")
+        if not failed:
+            with self._lock:
+                changed = result.strip() != (text or "").strip()
+                self.status = "Prompt enhanced." if changed else "Prompt unchanged."
+        self.last_enhance_failed = failed
+        return result
+
+    # ------------------------------------------------------------------ history
+    def _snapshot(self) -> dict[str, Any]:
+        """Capture composition state: layers, poses, images, backdrop, selection.
+
+        Layer objects and images are stored by reference, so a snapshot never
+        copies pixels — that also means restore can bring back a deleted layer
+        or a pre-regeneration image, because the snapshot keeps the reference
+        alive. Everything the app mutates IN PLACE on a layer must be recorded
+        by value or by old-reference here: generate_selected assigns new image
+        and prompt onto the same object, so a snapshot that only held the
+        object would silently restore the new content.
+        """
+        return {
+            "objects": list(self.doc.objects),
+            "fields": {
+                o.id: {
+                    "transform": replace(o.transform),
+                    "image": o.image,
+                    "raw_image": o.raw_image,
+                    "prompt": o.prompt,
+                    "prompt_enabled": o.prompt_enabled,
+                    "isolation_prompt": o.isolation_prompt,
+                    "cutout": o.cutout,
+                    "feather": o.feather,
+                    "blend_mode": o.blend_mode,
+                    "name": o.name,
+                }
+                for o in self.doc.objects
+            },
+            "selected_id": self.doc.selected_id,
+            "background": self.doc.background,
+            "background_prompt": self.doc.background_prompt,
+            # Background placement is document state like any other; leaving it
+            # out would make undo and timeline scrubs silently reset the
+            # backdrop's scale, rotation, offset and flips.
+            "bg_placement": (
+                self.doc.bg_scale,
+                self.doc.bg_rotation,
+                self.doc.bg_offset_x,
+                self.doc.bg_offset_y,
+                self.doc.bg_flip_x,
+                self.doc.bg_flip_y,
+            ),
+            "active_backdrop_id": self.active_backdrop_id,
+            # Improving the scene locks a custom OUTPUT prompt; without these
+            # the undo that the UI promises would revert pixels but not wording.
+            "custom_prompt": self.output_settings.custom_prompt,
+            "prompt_locked": self.output_settings.prompt_locked,
+        }
+
+    def _restore(self, snap: dict[str, Any]) -> None:
+        self.doc.objects = list(snap["objects"])
+        fields = snap.get("fields", {})
+        for obj in self.doc.objects:
+            rec = fields.get(obj.id)
+            if rec is None:
+                continue
+            obj.transform = replace(rec["transform"])
+            obj.image = rec["image"]
+            obj.raw_image = rec["raw_image"]
+            obj.prompt = rec["prompt"]
+            obj.prompt_enabled = rec["prompt_enabled"]
+            obj.isolation_prompt = rec["isolation_prompt"]
+            obj.cutout = rec.get("cutout", True)
+            obj.feather = rec.get("feather", 0.0)
+            obj.blend_mode = rec.get("blend_mode", "normal")
+            obj.name = rec["name"]
+            # Content may differ from whatever a client has cached.
+            obj.rev += 1
+        self.doc.background = snap.get("background")
+        self.doc.background_prompt = snap.get("background_prompt", "")
+        placement = snap.get("bg_placement")
+        if placement is not None:
+            (
+                self.doc.bg_scale,
+                self.doc.bg_rotation,
+                self.doc.bg_offset_x,
+                self.doc.bg_offset_y,
+                self.doc.bg_flip_x,
+                self.doc.bg_flip_y,
+            ) = placement
+        self.background_rev += 1
+        # Which library chip is highlighted has to follow the backdrop, or the
+        # shelf marks one backdrop active while the canvas shows another.
+        self.active_backdrop_id = snap.get("active_backdrop_id", "")
+        self.output_settings.custom_prompt = snap.get("custom_prompt", "")
+        self.output_settings.prompt_locked = bool(snap.get("prompt_locked", False))
+        selected = snap["selected_id"]
+        known = {o.id for o in self.doc.objects}
+        self.doc.selected_id = selected if selected in known else None
+
+    # ----------------------------------------------------------------- timeline
+    def record(self, label: str) -> None:
+        """Append the current state to the timeline as one completed step."""
+        with self._lock:
+            self._timeline.append({"label": label[:60], "snap": self._snapshot()})
+            del self._timeline[:-TIMELINE_LIMIT]
+            self._timeline_pos = len(self._timeline) - 1
+
+    def timeline_view(self) -> dict[str, Any]:
+        """Read the timeline WITHOUT taking the session lock.
+
+        Every generation, refine and export holds the lock for the whole model
+        run — tens of seconds, minutes for a SeedVR2 export. Status polling has
+        to stay responsive during exactly those operations, so this reads a
+        snapshot of the list reference instead of locking. Worst case a poll
+        sees the labels one step stale, which is harmless.
+        """
+        entries = list(self._timeline)
+        pos = self._timeline_pos
+        return {
+            "pos": max(0, min(pos, len(entries) - 1)) if entries else -1,
+            "entries": [e["label"] for e in entries],
+        }
+
+    def timeline_goto(self, index: int) -> Image.Image:
+        """Scrub the composition to a timeline entry. Undoable like any edit."""
+        with self._lock:
+            if not self._timeline:
+                return self.refresh_work()
+            index = max(0, min(len(self._timeline) - 1, int(index)))
+            self.push_history()
+            self._restore(self._timeline[index]["snap"])
+            self._timeline_pos = index
+            self.status = f"Timeline: {self._timeline[index]['label']}"
+            self.last_work = compose_work_image(self.doc)
+            return self.last_work
+
+    def push_history(self) -> None:
+        """Record the current state as an undo point, before a mutating edit.
+
+        Snapshots are full state, so this is not optional decoration: an edit
+        that skips it leaves the newest undo entry describing a much older
+        composition, and one Ctrl+Z then reverts everything since. Every
+        method that mutates the document must call this first.
+
+        Inside coalesced_history() this is a no-op, so a multi-step operation
+        lands as a single undo entry instead of one per internal step.
+        """
+        with self._lock:
+            if self._history_depth > 0:
+                return
+            self._undo_stack.append(self._snapshot())
+            # Drop the oldest entries past the limit.
+            del self._undo_stack[:-HISTORY_LIMIT]
+            # A new edit invalidates any redo branch.
+            self._redo_stack.clear()
+
+    @contextmanager
+    def coalesced_history(self):
+        """Group a multi-step operation into ONE undo entry.
+
+        Improve-and-regenerate rewrites a prompt and then replaces the image.
+        Left alone that is two undo entries, so the first Ctrl+Z would put the
+        old picture back while leaving the new wording in place — a state the
+        user never asked for and cannot see the logic of.
+        """
+        with self._lock:
+            self.push_history()
+            self._history_depth += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._history_depth = max(0, self._history_depth - 1)
+
+    @property
+    def can_undo(self) -> bool:
+        return bool(self._undo_stack)
+
+    @property
+    def can_redo(self) -> bool:
+        return bool(self._redo_stack)
+
+    def undo(self) -> Image.Image:
+        with self._lock:
+            if not self._undo_stack:
+                self.status = "Nothing to undo."
+                return self.refresh_work()
+            self._redo_stack.append(self._snapshot())
+            self._restore(self._undo_stack.pop())
+            self.status = f"Undo ({len(self._undo_stack)} left)."
+            self._sync_timeline_pos("undo")
+            self.last_work = compose_work_image(self.doc)
+            return self.last_work
+
+    def redo(self) -> Image.Image:
+        with self._lock:
+            if not self._redo_stack:
+                self.status = "Nothing to redo."
+                return self.refresh_work()
+            self._undo_stack.append(self._snapshot())
+            self._restore(self._redo_stack.pop())
+            self.status = f"Redo ({len(self._redo_stack)} left)."
+            self._sync_timeline_pos("redo")
+            self.last_work = compose_work_image(self.doc)
+            return self.last_work
+
+    def _sync_timeline_pos(self, label: str) -> None:
+        """Keep the timeline cursor describing what the canvas actually shows.
+
+        Undo and redo move the composition without going through the slider.
+        Leaving the cursor where it was made /state report a step the canvas
+        was no longer showing, and the studio's poll then dragged the slider
+        back to it.
+
+        If the restored state matches a recorded step, point at it. If it does
+        not — undo can land between steps, e.g. after a layer was added but
+        before it was generated — append it, because the timeline is a
+        chronology of everything the composition has been, and a state the user
+        can see must be somewhere on it.
+        """
+        current = (
+            self.doc.background,
+            tuple((o.id, id(o.image)) for o in self.doc.objects),
+        )
+        for i in range(len(self._timeline) - 1, -1, -1):
+            snap = self._timeline[i]["snap"]
+            fields = snap.get("fields", {})
+            candidate = (
+                snap.get("background"),
+                tuple((o.id, id(fields.get(o.id, {}).get("image"))) for o in snap["objects"]),
+            )
+            if candidate == current:
+                self._timeline_pos = i
+                return
+        self.record(label)
 
     # ------------------------------------------------------------------- output
     def apply_style_preset(self, name: str | None) -> "OutputSettings":
@@ -971,8 +1578,16 @@ class ComposerSession:
 
         threading.Thread(target=_reload, daemon=True, name="flux-warm-reload").start()
 
-    def run_output(self, work_image: Image.Image | None = None) -> Image.Image:
-        """Run SDXL Hyper img2img on the WORK composition."""
+    def run_output(
+        self, work_image: Image.Image | None = None, *, preview: bool = False
+    ) -> Image.Image:
+        """Run SDXL Hyper img2img on the WORK composition.
+
+        ``preview`` trades resolution and steps for latency so the OUTPUT can
+        keep up with dragging. A full-quality pass follows once movement stops,
+        and anything that ships a final image re-renders first, so a preview is
+        never what gets exported.
+        """
         with self._lock:
             work = work_image or self.last_work or compose_work_image(self.doc)
             self.last_work = work
@@ -990,18 +1605,37 @@ class ComposerSession:
             # Sticky seed: never leave OUTPUT to chance mid-session.
             if self.output_settings.seed < 0:
                 self.output_settings.seed = random.randint(0, 2_147_483_647)
-            self.status = "Refining OUTPUT with SDXL Hyper…"
+            init = work
+            steps = self.output_settings.steps
+            if preview:
+                scale = float(
+                    self.config.get("sdxl_hyper", "preview_scale", default=0.625)
+                )
+                steps = max(
+                    1, int(self.config.get("sdxl_hyper", "preview_steps", default=4))
+                )
+                # SDXL wants multiples of 8; round rather than let it silently pad.
+                pw = max(256, (int(work.width * scale) // 8) * 8)
+                ph = max(256, (int(work.height * scale) // 8) * 8)
+                if (pw, ph) != work.size:
+                    init = work.resize((pw, ph), Image.Resampling.BILINEAR)
+                self.status = "Previewing…"
+            else:
+                self.status = "Refining OUTPUT with SDXL Hyper…"
             try:
                 out = self.sdxl.refine(
-                    init_image=work,
+                    init_image=init,
                     prompt=prompt,
                     negative_prompt=self.output_settings.negative_prompt,
                     denoise=self.output_settings.denoise,
-                    steps=self.output_settings.steps,
+                    steps=steps,
                     seed=int(self.output_settings.seed),
                     guidance_scale=self.output_settings.cfg,
                     eta=self.output_settings.eta,
                 )
+                if preview and out.size != work.size:
+                    # Back to canvas size so the OUTPUT pane does not jump.
+                    out = out.resize(work.size, Image.Resampling.LANCZOS)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("OUTPUT refine failed")
                 self.status = f"OUTPUT failed: {exc}"
@@ -1013,15 +1647,25 @@ class ComposerSession:
                 self._schedule_flux_reload()
                 return self.last_output
             self.last_output = out
+            self.output_is_preview = preview
             self.output_rev += 1
-            self.status = "OUTPUT updated."
+            self.status = "Preview — settling…" if preview else "OUTPUT updated."
             self._schedule_flux_reload()
             return out
+
+    def ensure_full_output(self) -> Image.Image | None:
+        """Re-render at full quality if the current OUTPUT is only a preview."""
+        with self._lock:
+            if self.output_is_preview or self.last_output is None:
+                return self.run_output()
+            return self.last_output
 
     # ------------------------------------------------------------------- export
     def refine_final(self, steps: int, denoise: float) -> Image.Image:
         """Refine the current OUTPUT again without replacing the WORK source."""
         with self._lock:
+            # Never build a final image on top of a low-resolution preview.
+            self.ensure_full_output()
             if self.last_output is None:
                 self.run_output()
             source = self.last_output
@@ -1060,7 +1704,8 @@ class ComposerSession:
     ) -> tuple[Image.Image, Path]:
         """Upscale the currently accepted OUTPUT and save it."""
         with self._lock:
-            # Ensure we have a current OUTPUT
+            # Ensure we have a current OUTPUT, and never upscale a preview.
+            self.ensure_full_output()
             if self.last_output is None:
                 self.run_output()
             source = self.last_output or self.last_work or compose_work_image(self.doc)

@@ -53,4 +53,4 @@ xwave-composer = "xwave_composer.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-xwave_composer = ["ui/assets/*", "data/*"]
+xwave_composer = ["ui/assets/*", "data/*", "api/*.html"]

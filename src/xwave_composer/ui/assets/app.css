@@ -566,3 +566,72 @@ footer {
 .xwave-app .eta-bar {
   color: var(--xw-text-dim) !important;
 }
+
+/* ══ simple / advanced mode ══════════════════════════════════════
+   Simple mode is the default: a prompt, a canvas, and a sticker tray.
+   Everything technical carries .xwave-advanced and is hidden until the
+   user asks for it. The toggle is client side so switching is instant
+   and never re-renders the canvas. */
+body[data-xwave-mode="simple"] .xwave-advanced {
+  display: none !important;
+}
+
+/* Give the canvases the space the hidden panels were using. */
+body[data-xwave-mode="simple"] .xwave-canvases .xwave-canvas-frame {
+  max-width: none;
+}
+
+.xwave-mode-toggle {
+  background: transparent;
+  border: 1px solid var(--xw-border);
+  color: var(--xw-text-dim);
+  font-family: var(--xw-font);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.xwave-mode-toggle:hover {
+  color: var(--xw-text);
+  border-color: var(--xw-accent);
+}
+
+.xwave-mode-toggle[aria-pressed="true"] {
+  color: var(--xw-accent);
+  border-color: var(--xw-accent);
+  background: var(--xw-accent-dim);
+}
+
+/* ── the make bar: one prompt, two buttons ── */
+.xwave-make-row {
+  gap: 8px !important;
+  align-items: stretch !important;
+}
+
+.xwave-make-row textarea {
+  font-size: 15px !important;
+  min-height: 46px !important;
+}
+
+.xwave-make-btn button {
+  height: 100%;
+  min-height: 46px;
+  font-weight: 600 !important;
+}
+
+/* ── improve panel ── */
+.xwave-critique textarea {
+  font-family: var(--xw-font) !important;
+  font-size: 12.5px !important;
+  line-height: 1.5 !important;
+  color: var(--xw-text-dim) !important;
+  background: var(--xw-panel) !important;
+}
+
+.xwave-improve-row {
+  gap: 6px !important;
+}

@@ -102,7 +102,12 @@ class FluxGenerator:
                 try:
                     pipe = DiffusionPipeline.from_pretrained(model_id, torch_dtype=self.dtype)
                 except TypeError:
+                    # This pipeline class does not accept torch_dtype, so it loads
+                    # in fp32. For a 4B transformer that is ~16 GB of weights
+                    # instead of ~8 GB, which can exhaust VRAM before generation
+                    # starts. Load, then cast to the configured dtype.
                     pipe = DiffusionPipeline.from_pretrained(model_id)
+                    pipe = pipe.to(dtype=self.dtype)
         return pipe.to(self.device)
 
     def _load_model(self, model_id: str) -> str:
