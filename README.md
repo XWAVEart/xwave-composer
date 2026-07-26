@@ -1,6 +1,6 @@
 # xwave-composer
 
-Multi-layer AI image composition for local use on an **NVIDIA RTX 5090**.
+Multi-layer AI image composition for local use on a high-VRAM **NVIDIA** GPU.
 
 | Stage | Model | Role |
 |--------|--------|------|
@@ -14,43 +14,70 @@ Hybrid design: compose freely on the WORK canvas, refine with a fast SDXL Hyper 
 
 ## Requirements
 
-- Linux, Python 3.10+
-- NVIDIA GPU (designed for RTX 5090, ~32 GB VRAM)
-- CUDA-capable PyTorch
+- Linux
+- Python 3.10 or newer
+- An NVIDIA GPU with enough VRAM for Flux + SDXL Hyper (about 24 GB or more recommended; developed on ~32 GB)
+- A CUDA-capable PyTorch build that matches your driver
 
 ## Setup
 
+1. Clone or copy the repository, then enter the project directory.
+2. Create and activate a virtual environment:
+
 ```bash
-cd /home/will/xwave-composer
+cd /path/to/xwave-composer
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
+```
 
-# Install the CUDA 13 build used by the RTX 5090 setup
+3. Install PyTorch for your CUDA version. Use the index that matches your system
+   (see [PyTorch Get Started](https://pytorch.org/get-started/locally/)).
+   Example for a CUDA 13 wheel:
+
+```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+```
 
+4. Install the project and its dependencies:
+
+```bash
 pip install -r requirements.txt
-# MSLK supplies the accelerated NVFP4 kernels and must match CUDA/PyTorch.
-pip install --pre mslk --index-url https://download.pytorch.org/whl/nightly/cu130
 pip install -e .
-# Install the export-only SeedVR2 CLI runtime. Weights download on first export.
+```
+
+5. Optional — for **NVFP4** compute, install MSLK. The MSLK build must match
+   your CUDA and PyTorch versions. Example for a CUDA 13 nightly wheel:
+
+```bash
+pip install --pre mslk --index-url https://download.pytorch.org/whl/nightly/cu130
+```
+
+Skip this step if you use only **BF16** or **MXFP8**.
+
+6. Optional — install the SeedVR2 CLI used for 2× export.
+   Weights download on the first export:
+
+```bash
 python scripts/setup_seedvr2.py
 ```
 
-Edit `config.yaml` for model IDs, paths, and defaults.
+7. Edit `config.yaml` for model IDs, paths, and defaults.
 
 ### Hugging Face access
 
-Some models (Flux family, SDXL base) may require a Hugging Face token and license acceptance:
+Some models (Flux family, SDXL bases) may need a Hugging Face token and license acceptance:
 
 ```bash
 huggingface-cli login
 ```
 
-Place optional style assets under:
+### Optional style assets
 
-- `models/loras/` — style LoRAs for OUTPUT  
-- `models/embeddings/` — textual inversions for OUTPUT  
+Place local adapters here if you use them:
+
+- `models/loras/` — style LoRAs for OUTPUT
+- `models/embeddings/` — textual inversions for OUTPUT
 
 ## Run
 
@@ -62,8 +89,8 @@ python run.py
 # optional: python run.py --preload --profile mxfp8
 ```
 
-Open on this machine: `http://127.0.0.1:7860`  
-Open on the LAN: `http://<this-host-ip>:7860`
+Open locally: `http://127.0.0.1:7860`  
+Open on the LAN: `http://<host-ip>:7860`
 
 ## User guide
 
