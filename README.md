@@ -67,15 +67,21 @@ Open on the LAN: `http://<this-host-ip>:7860`
 
 ## Workflow
 
-1. **Load models** — Flux + SDXL Hyper + SAM2/rembg  
+1. **Load models** — Flux + SDXL Hyper + SAM2/rembg. Use the top-bar **BF16 / MXFP8 / NVFP4** buttons to switch compute; the VRAM meter sits on that same row.  
 2. **Layers** — the Background layer exists from the start; **+ Layer** adds object layers.
-   Select a layer, type its prompt in the Layer panel, press **⟡ Generate** (or Enter).
-   Layer cards show the prompt directly — no separate titles.  
-3. **Re-cut** — with an object selected, click the subject in the raw preview (SAM2) or use Re-cut (rembg)  
+   Select a layer, type its prompt in the Layer panel, press **▶️** (or Enter).
+   Object layers get scale / rotation / Flip H·V, opacity, feather, and blend; background gets scale / rotation / X·Y / Flip H·V.
+   Layer cards show the prompt directly — no separate titles.
+   Canvas size is chosen as `aspect · pixels` (portrait → **1:1** → landscape); Apply lives in the same control box.  
+3. **Cutout / Re-cut** — with an object selected, choose **rembg / SAM2 / none** under Reset · Re-cut · Delete, then **Re-cut**.
+   Click the subject in the raw preview to re-cut with SAM2. The ✂️ control on the generate row toggles cutout-after-generate; ⬜ / ⬛ pick the isolation backdrop.  
 4. **WORK canvas** — drag to move, corner handles to stretch, orange handle to rotate; drag cards to reorder, × to delete  
-5. **OUTPUT** — CFG / Denoise / Steps / Eta knobs sit directly below the OUTPUT canvas; style preset dropdown, negative prompt, optional LLM rewrite in the Style panel  
+5. **OUTPUT** — CFG / Denoise / Steps / Eta knobs sit in the top-right bar above the OUTPUT canvas.
+   Style panel: preset dropdown, compact seed + **🎲**, folded **Prompt options** (order / manual / negative), optional LLM rewrite.  
 6. **Output model** — pick an SDXL base (SDXL Base, DreamShaper XL, Juggernaut XL v9, epiCRealism XL, RealVisXL V5) or paste any HF repo id / CivitAI `.safetensors` link, then press Load; the Hyper LoRA is re-applied on top  
 7. **Final output** — use **Refine OUTPUT** to review an SDXL pass at the chosen strength/steps; once accepted, export that exact image 2× with SeedVR2. Flux/SDXL unload, SeedVR2 runs once, then exits and saves a high-quality JPEG to `exports/`
+
+Hover any control (especially emoji buttons) for a short tooltip.
 
 ## Style presets
 
@@ -108,7 +114,8 @@ xwave-composer/
     models/                # Flux, SDXL Hyper, SAM2/rembg, LLM, upscaler
     pipeline/session.py    # session orchestration
     style/                 # CSV preset loader + prompt build
-    ui/gradio_app.py       # Gradio UI + WORK canvas JS
+    ui/gradio_app.py       # Gradio UI
+    ui/assets/             # app.css, work_canvas.js, tooltips.js
   workspace/               # runtime layer images
   exports/                 # 2× exports
   models/                  # local cache / LoRAs / embeddings
@@ -122,7 +129,7 @@ xwave-composer/
 | `optimization.profile` | `bf16`, `mxfp8` (default), or `nvfp4`; also selectable in the UI |
 | `optimization.compile` | Regionally compile repeated diffusion blocks after quantization |
 | `sdxl_hyper.base_model_id` | Startup SDXL base; swappable at runtime from the Output model menu |
-| `isolation.preferred` | `sam2` or `rembg` (auto-isolation always uses rembg; SAM2 is for click re-cut) |
+| `isolation.preferred` | `sam2` or `rembg` (default backend; the Layer panel rembg / SAM2 / none selector overrides for Re-cut / import) |
 | `llm.model_id` | Qwen2.5-VL-3B-Instruct (vision rewrite) |
 | `style.presets_file` | CSV of style presets (default project root) |
 | `export.upscaler` | `seedvr2` default; export-only subprocess (7B/3B, FP16/FP8) |
@@ -145,7 +152,7 @@ SeedVR2 export failures are shown explicitly by default instead of silently subs
 - Keep Flux and SDXL Hyper loaded for interactive work.  
 - Load the LLM only when rewrite is enabled.  
 - Load the upscaler only on export.  
-- Use the **Free optional VRAM** button after export/rewrite.  
+- Use the **Free VRAM** button after export/rewrite.  
 - Live OUTPUT uses low steps (default 6) and moderate denoise (default 0.3). Raise steps for final quality.
 
 ## License
