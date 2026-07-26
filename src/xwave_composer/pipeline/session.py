@@ -83,6 +83,8 @@ class ComposerSession:
     # Object-layer UI preference: when False, generate/import places the full
     # image and the isolation prompt is cleared / unused.
     layer_cutout: bool = True
+    # Reject out-of-order canvas transform events (Gradio can deliver late).
+    _last_transform_ts: dict[str, int] = field(default_factory=dict, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def __post_init__(self) -> None:

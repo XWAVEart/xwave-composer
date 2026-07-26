@@ -362,7 +362,10 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
     def run_output_now() -> Image.Image:
         try:
-            return session.run_output(_work(session))
+            # Always re-read last_work under the session lock inside
+            # run_output(). Snapshotting WORK here races with later
+            # transforms and can refine a stale pose.
+            return session.run_output()
         except Exception as exc:  # noqa: BLE001
             logger.exception("OUTPUT")
             session.status = f"OUTPUT error: {exc}"
@@ -395,6 +398,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 # Re-check after the sleep — SDXL may have been unloaded for
                 # a SeedVR2 export while this worker was waiting.
                 if not session.core_ready:
+                    with out_lock:
+                        out_state["dirty"] = True
                     return
                 run_output_now()
             finally:
@@ -402,35 +407,81 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                     out_state["running"] = False
                     again = out_state["dirty"]
                 if again and session.core_ready:
-                    mark_output_dirty()
+                    mark_output_dirty(delay_override=0.05)
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def pack(run_out: bool = True, sync_out: bool = False) -> tuple:
+    def pack_work_then_output() -> tuple:
+        """Push WORK/layers immediately; refine OUTPUT asynchronously via poll.
+
+        Never block the WORK HTML return on SDXL. Kick dirty OUTPUT without
+        writing the image slot here so a late JPEG cannot clobber a fresher
+        poll, and so WORK always paints before OUTPUT.
+        """
+        mark_output_dirty(delay_override=0.05)
+        return pack(run_out=False, sync_out=False, include_output=False)
+
+    def pack_output_only(*, include_layers: bool = False) -> tuple:
+        """Refine OUTPUT without rewriting WORK (prompt/params-only edits)."""
+        mark_output_dirty(delay_override=0.05)
+        return pack(
+            run_out=False,
+            sync_out=False,
+            include_work=False,
+            include_layers=include_layers,
+            include_output=False,
+        )
+
+    def pack(
+        run_out: bool = True,
+        sync_out: bool = False,
+        *,
+        include_work: bool = True,
+        include_layers: bool = True,
+        include_output: bool | None = None,
+    ) -> tuple:
         """-> work_html, layers_html, output, status,
         insp_prompt, iso_backdrop, insp_opacity, insp_feather, insp_blend,
         raw_view, prompt_view,
         llm_prompt_view, mute_prompt_btn, cutout_chk, obj_rotation,
-        bg_scale, bg_rotation, bg_offset_x, bg_offset_y, bg_flip_x, bg_flip_y"""
+        bg_scale, bg_rotation, bg_offset_x, bg_offset_y, bg_flip_x, bg_flip_y
+
+        Set include_work/include_layers False for lightweight responses that
+        must not clobber the optimistic WORK canvas / layer stack.
+
+        OUTPUT ordering rule: when OUTPUT is refined asynchronously
+        (``run_out`` and not ``sync_out``), the image slot is skipped so
+        poll_output delivers it after WORK has already updated. Pass
+        ``include_output=True/False`` to override.
+        """
         work = _work(session)
         if sync_out:
-            # Cancel a sleeping debounce worker. Normal editing actions return
-            # the completed image in this event instead of waiting for polling.
+            # Cancel a sleeping debounce worker. Used for chained follow-ups
+            # after WORK was already delivered (e.g. generate phase 2).
             with out_lock:
                 out_state["dirty"] = False
                 out_state["token"] += 1
             out = run_output_now()
         else:
             if run_out:
-                mark_output_dirty()
+                mark_output_dirty(delay_override=0.05)
             out = session.last_output or work
+        if include_output is None:
+            # Async refine (run_out): poll owns the image so WORK can paint
+            # first. Sync refine: return the fresh JPEG. Otherwise keep the
+            # current OUTPUT visible (e.g. final refine already in last_output).
+            if sync_out:
+                include_output = True
+            elif run_out:
+                include_output = False
+            else:
+                include_output = True
         insp = _inspector(session)
         kind = insp["kind"]
         fields_on = kind != "none"
         obj_on = kind == "object"
         bg_on = kind == "background"
         cutout_on = obj_on and bool(session.layer_cutout)
-        scene = _scene_dict(session)
         s = session.output_settings
         llm_on = bool(s.use_llm_rewrite)
         concat_val = session.last_concat_prompt or ""
@@ -443,10 +494,19 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             llm_val = s.custom_prompt or session.last_output_prompt or ""
         else:
             llm_val = session.last_output_prompt if llm_on else ""
+        work_update: Any = (
+            render_work_html(_scene_dict(session)) if include_work else gr.skip()
+        )
+        layers_update: Any = (
+            render_layers_html(session) if include_layers else gr.skip()
+        )
+        output_update: Any = (
+            _output_jpeg_path(out) if include_output else gr.skip()
+        )
         return (
-            render_work_html(scene),
-            render_layers_html(session),
-            _output_jpeg_path(out),
+            work_update,
+            layers_update,
+            output_update,
             session.status,
             gr.update(value=insp["prompt"], interactive=fields_on),
             gr.update(
@@ -1036,8 +1096,22 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             atype = data.get("type")
 
             if atype == "transform":
+                lid = str(data.get("id", ""))
+                ts = int(data.get("_ts") or 0)
+                last_ts = session._last_transform_ts.get(lid, 0)
+                final = data.get("final")
+                if ts and ts < last_ts:
+                    # Stale Gradio-queued drag event — ignore so we don't
+                    # snap the layer back to an older position. Still kick
+                    # OUTPUT on a rejected final: a newer live pose may
+                    # already be applied without having scheduled refine.
+                    if final is True:
+                        mark_output_dirty(delay_override=0.05)
+                    return tuple(gr.update() for _ in pack_out)
+                if ts:
+                    session._last_transform_ts[lid] = ts
                 session.update_transform_by_id(
-                    str(data.get("id", "")),
+                    lid,
                     x=data.get("x"),
                     y=data.get("y"),
                     scale_x=data.get("scale_x"),
@@ -1048,17 +1122,27 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 # Older tabs (opened before the canvas JS update) omit
                 # ``final``. Keep those functional until the user refreshes;
                 # current tabs send false while dragging and true on release.
-                final = data.get("final")
                 if final is True:
-                    # Pointer-up triggers exactly one immediate SDXL pass and
-                    # returns its image in this callback.
-                    return pack(run_out=False, sync_out=True)
-                elif final is None:
+                    # Keep the WORK canvas on the optimistic local pose.
+                    # Kick OUTPUT asynchronously instead of blocking this
+                    # event on SDXL (which made the UI feel laggy/jumpy).
+                    # Do not write output_image here — a late pack with the
+                    # pre-refine JPEG can clobber a fresher poll_output and
+                    # leave rev_state stuck until the next move.
+                    mark_output_dirty(delay_override=0.05)
+                    return pack(
+                        run_out=False,
+                        sync_out=False,
+                        include_work=False,
+                        include_layers=False,
+                        include_output=False,
+                    )
+                if final is None:
                     # Legacy browser assets emit every 120 ms and do not label
                     # pointer-up. A longer debounce collapses the stream into
                     # one render after movement stops.
                     mark_output_dirty(delay_override=0.8)
-                # Live events synchronize the transform without starting SDXL.
+                # Live events update server state only — never rewrite the scene.
                 return tuple(gr.update() for _ in pack_out)
 
             if atype == "select":
@@ -1069,17 +1153,25 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                     session.select_layer_id(str(sid))
                 else:
                     session.doc.selected_id = None
-                return pack(run_out=False)
+                # JS already highlights the card + canvas selection. Skip the
+                # heavy work_html rebuild so the click feels instant. Skip
+                # OUTPUT too — select does not change composition, and a
+                # stale JPEG write can clobber a just-polled refine.
+                return pack(
+                    run_out=False,
+                    include_work=False,
+                    include_output=False,
+                )
 
             if atype == "delete":
                 lid = data.get("id")
                 if lid and lid != "__bg__":
                     session.delete_layer(str(lid))
-                return pack(run_out=True)
+                return pack_work_then_output()
 
             if atype == "reorder":
                 session.reorder_layers([str(i) for i in (data.get("ids") or [])])
-                return pack(run_out=True)
+                return pack_work_then_output()
 
             return pack(run_out=False)
 
@@ -1088,7 +1180,12 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             session.add_empty_object()
             return pack(run_out=False)
 
+        # When True, the chained generate follow-up should refine OUTPUT.
+        # Cleared on failure / empty prompt so we don't re-refine a stale pose.
+        generate_needs_output = {"ok": False}
+
         def on_generate(prompt, backdrop, seed, cutout, den, steps, cfg_v, eta_v, llm, neg, oseed):
+            generate_needs_output["ok"] = False
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             if not prompt or not str(prompt).strip():
                 session.status = "Type a prompt for the selected layer first."
@@ -1104,7 +1201,22 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 logger.exception("Generation failed")
                 session.status = f"Generation failed: {exc}"
                 return pack(run_out=False)
-            return pack(run_out=False, sync_out=True)
+            # Push WORK/layers first. Refining OUTPUT in this same response
+            # (sync_out) meant the JPEG could paint before the canvas scene
+            # HTML arrived and before layer data-URLs finished decoding.
+            generate_needs_output["ok"] = True
+            return pack(run_out=False, sync_out=False, include_output=False)
+
+        def on_generate_output():
+            if not generate_needs_output["ok"]:
+                return tuple(gr.update() for _ in pack_out)
+            generate_needs_output["ok"] = False
+            return pack(
+                run_out=False,
+                sync_out=True,
+                include_work=False,
+                include_layers=False,
+            )
 
         def on_cutout(checked):
             session.set_layer_cutout(bool(checked))
@@ -1133,7 +1245,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             if abs(obj.transform.rotation - new_rot) < 1e-6:
                 return tuple(gr.update() for _ in pack_out)
             session.update_transform_by_id(obj.id, rotation=new_rot)
-            return pack(run_out=False, sync_out=True)
+            return pack_work_then_output()
 
         def on_feather(feather, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1146,7 +1258,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             obj.feather = new_f
             session.last_work = session.refresh_work()
             session.status = f"Edge feather → {new_f:.0f}px"
-            return pack(run_out=False, sync_out=True)
+            return pack_work_then_output()
 
         def on_blend_mode(mode_label, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1159,7 +1271,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             obj.blend_mode = new_mode
             session.last_work = session.refresh_work()
             session.status = f"Blend mode → {blend_mode_label(new_mode)}"
-            return pack(run_out=False, sync_out=True)
+            return pack_work_then_output()
 
         def on_bg_transform(
             scale, rotation, offset_x, offset_y, flip_x, flip_y,
@@ -1193,7 +1305,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 flip_x=new_fx,
                 flip_y=new_fy,
             )
-            return pack(run_out=False, sync_out=True)
+            return pack_work_then_output()
 
         def on_import(image, cutout, prompt, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1209,7 +1321,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 logger.exception("Import failed")
                 session.status = f"Import failed: {exc}"
                 return pack(run_out=False)
-            return pack(run_out=False, sync_out=True)
+            return pack_work_then_output()
 
         def on_prompt_lock(locked, current_text):
             s = session.output_settings
@@ -1299,7 +1411,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 session.status = "Select an object with a raw image."
                 return pack(run_out=False)
             session.reisolate_selected(prefer="rembg")
-            return pack(run_out=False, sync_out=True)
+            return pack_work_then_output()
 
         def on_raw_click(evt: gr.SelectData, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1313,7 +1425,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 session.status = "Click inside the raw image."
                 return pack(run_out=False)
             session.reisolate_selected(click_xy=(x, y), prefer="sam2")
-            return pack(run_out=False, sync_out=True)
+            return pack_work_then_output()
 
         def on_delete(den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1321,7 +1433,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 session.status = "Select an object layer to delete."
                 return pack(run_out=False)
             session.delete_selected()
-            return pack(run_out=True)
+            return pack_work_then_output()
 
         def on_duplicate(den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1329,7 +1441,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 session.status = "Select an object layer to duplicate."
                 return pack(run_out=False)
             session.duplicate_selected()
-            return pack(run_out=True)
+            return pack_work_then_output()
 
         def on_mute_prompt(den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1337,8 +1449,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 session.status = "Select an object layer to mute its prompt."
                 return pack(run_out=False)
             session.toggle_selected_prompt()
-            # Prompt composition changed — rebuild OUTPUT without changing WORK.
-            return pack(run_out=False, sync_out=True)
+            # Prompt composition changed — refresh layer cards + OUTPUT;
+            # WORK pixels are unchanged.
+            return pack_output_only(include_layers=True)
 
         def on_reset_workspace():
             with out_lock:
@@ -1369,11 +1482,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 session.status = "Select a layer to reset."
                 return pack(run_out=False)
             session.reset_selected_transform()
-            return pack(run_out=True)
+            return pack_work_then_output()
 
         def on_roll_seed():
             seed = session.roll_output_seed()
-            mark_output_dirty()
+            mark_output_dirty(delay_override=0.05)
             return seed, session.status
 
         def on_opacity_live(opacity, den, steps, cfg_v, eta_v, llm, neg, oseed):
@@ -1382,7 +1495,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             if obj is None:
                 return pack(run_out=False)
             session.update_transform_by_id(obj.id, opacity=float(opacity))
-            return pack(run_out=False, sync_out=True)
+            return pack_work_then_output()
 
         def on_prompt_edit(prompt):
             """Persist prompt edits to the selected layer without regenerating."""
@@ -1402,7 +1515,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         def on_params_now(den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             if session.doc.background is not None or session.doc.objects:
-                return pack(run_out=False, sync_out=True)
+                # Params only affect OUTPUT refine — leave WORK alone.
+                return pack_output_only()
             return pack(run_out=False)
 
         def on_size(preset, den, steps, cfg_v, eta_v, llm, neg, oseed):
@@ -1410,7 +1524,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             w, h = ASPECT_PRESETS.get(preset, (1024, 1024))
             session.set_canvas_size(w, h)
             session.status = f"Canvas set to {w}×{h}."
-            return pack(run_out=True)
+            return pack_work_then_output()
 
         def on_base(preset_name, custom):
             ref = str(custom or "").strip() or BASE_MODEL_PRESETS.get(
@@ -1537,13 +1651,15 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 llm_val = session.last_output_prompt or ""
             else:
                 llm_val = ""
+            # Never rewrite WORK/layers from the poll timer — that clobbers
+            # in-progress (or just-finished) canvas drags with a stale scene.
             return (
                 _output_jpeg_path(session.last_output),
                 session.status,
                 concat_val,
                 session.output_rev,
-                render_work_html(_scene_dict(session)),
-                render_layers_html(session),
+                gr.skip(),
+                gr.skip(),
                 gr.update(value=llm_val, visible=llm_on),
             )
 
@@ -1586,11 +1702,19 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             on_generate,
             inputs=[insp_prompt, iso_backdrop, gen_seed, cutout_chk, *settings_in],
             outputs=pack_out,
+        ).then(
+            on_generate_output,
+            outputs=pack_out,
+            show_progress="hidden",
         )
         insp_prompt.submit(
             on_generate,
             inputs=[insp_prompt, iso_backdrop, gen_seed, cutout_chk, *settings_in],
             outputs=pack_out,
+        ).then(
+            on_generate_output,
+            outputs=pack_out,
+            show_progress="hidden",
         )
         cutout_chk.change(
             on_cutout,

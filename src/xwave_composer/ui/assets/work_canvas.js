@@ -30,6 +30,9 @@
     viewScale: 1,
     lastSceneB64: "",
     liveTimer: null,
+    // After a drag, keep local poses until the hold expires so a late
+    // Gradio scene rewrite cannot snap the layer backward.
+    holdTransformsUntil: 0,
   };
 
   function $(id) {
@@ -95,17 +98,28 @@
     if (prev && prev._url === url) return prev;
     const img = new Image();
     img._url = url;
-    img.decoding = "async";
+    // Data-URLs are local — sync decode so new layers paint with the
+    // scene update instead of after OUTPUT has already refreshed.
+    img.decoding = "sync";
     img.onload = draw;
     img.src = url;
     return img;
+  }
+
+  function holdingTransforms() {
+    return !!state.drag || Date.now() < state.holdTransformsUntil;
   }
 
   function applyScene(data) {
     if (!data || typeof data !== "object") return;
     state.canvasW = data.width || 1024;
     state.canvasH = data.height || 1024;
-    state.selectedId = data.selected_id || null;
+    // Prefer the optimistic local selection when the user just clicked a card.
+    if (data.selected_id != null && !holdingTransforms()) {
+      state.selectedId = data.selected_id || null;
+    } else if (data.selected_id != null && !state.selectedId) {
+      state.selectedId = data.selected_id || null;
+    }
     state.bgUrl = data.bg_data_url || null;
     state.bgImg = state.bgUrl ? loadImage(state.bgUrl, state.bgImg) : null;
     state.bgScale = data.bg_scale != null ? Number(data.bg_scale) : 1;
@@ -116,8 +130,19 @@
     state.bgFlipY = !!data.bg_flip_y;
 
     const prev = {};
+    const localPose = {};
+    const keepPose = holdingTransforms();
     state.layers.forEach(function (l) {
       if (l._img) prev[l.id] = l._img;
+      if (keepPose) {
+        localPose[l.id] = {
+          x: l.x,
+          y: l.y,
+          scale_x: l.scale_x,
+          scale_y: l.scale_y,
+          rotation: l.rotation,
+        };
+      }
     });
     state.layers = (data.layers || []).map(function (l) {
       const layer = Object.assign({}, l);
@@ -125,6 +150,14 @@
         prev[layer.id] && prev[layer.id]._url === layer.data_url
           ? prev[layer.id]
           : loadImage(layer.data_url, null);
+      const pose = localPose[layer.id];
+      if (pose) {
+        layer.x = pose.x;
+        layer.y = pose.y;
+        layer.scale_x = pose.scale_x;
+        layer.scale_y = pose.scale_y;
+        layer.rotation = pose.rotation;
+      }
       return layer;
     });
 
@@ -145,6 +178,23 @@
     } catch (e) {
       console.warn("xwave: scene parse failed", e);
     }
+  }
+
+  function selectLayerLocal(id) {
+    state.selectedId = id || null;
+    const stack = $("xwave-layer-stack");
+    if (stack) {
+      Array.prototype.forEach.call(
+        stack.querySelectorAll("[data-layer-id]"),
+        function (card) {
+          card.classList.toggle(
+            "is-selected",
+            card.getAttribute("data-layer-id") === id
+          );
+        }
+      );
+    }
+    draw();
   }
 
   // ── canvas drawing ───────────────────────────────────────────
@@ -215,6 +265,14 @@
       ctx.globalCompositeOperation = layer.blend_canvas || "source-over";
       if (layer._img && layer._img.complete && layer._img.naturalWidth) {
         ctx.drawImage(layer._img, -sz.w / 2, -sz.h / 2, sz.w, sz.h);
+      } else if (layer.data_url) {
+        // Placeholder so a just-added layer is visible on WORK before
+        // its bitmap finishes decoding (keeps OUTPUT from feeling first).
+        ctx.fillStyle = "rgba(94, 234, 212, 0.18)";
+        ctx.strokeStyle = "rgba(94, 234, 212, 0.55)";
+        ctx.lineWidth = 1.5 / state.viewScale;
+        ctx.fillRect(-sz.w / 2, -sz.h / 2, sz.w, sz.h);
+        ctx.strokeRect(-sz.w / 2, -sz.h / 2, sz.w, sz.h);
       }
       ctx.globalCompositeOperation = "source-over";
       ctx.restore();
@@ -355,6 +413,8 @@
       clearTimeout(state.liveTimer);
       state.liveTimer = null;
     }
+    // Hold local pose briefly so late scene HTML cannot snap backward.
+    state.holdTransformsUntil = Date.now() + 1200;
     emitTransform(true);
   }
 
@@ -389,7 +449,10 @@
       }
       const card = e.target.closest("[data-layer-id]");
       if (card) {
-        emitAction({ type: "select", id: card.getAttribute("data-layer-id") });
+        const id = card.getAttribute("data-layer-id");
+        // Paint selection immediately; Python only syncs inspector state.
+        selectLayerLocal(id);
+        emitAction({ type: "select", id: id });
       }
     });
 
