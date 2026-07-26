@@ -6,10 +6,11 @@ import logging
 from typing import Any
 
 import numpy as np
+import torch
 from PIL import Image
 
 from xwave_composer.config import AppConfig
-from xwave_composer.device import empty_cache
+from xwave_composer.device import empty_cache, hard_release
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +48,16 @@ class ObjectIsolator:
             from transformers import Sam2Model, Sam2Processor
 
             processor = Sam2Processor.from_pretrained(model_id)
-            model = Sam2Model.from_pretrained(model_id).to(self.device)
+            dtype = (
+                torch.bfloat16
+                if str(self.device).startswith("cuda") and torch.cuda.is_available()
+                else torch.float32
+            )
+            model = Sam2Model.from_pretrained(model_id, torch_dtype=dtype).to(self.device)
             model.eval()
             self._sam2_predictor = {"kind": "transformers", "model": model, "processor": processor}
             self.backend_in_use = "sam2"
-            return f"SAM2 loaded via transformers: {model_id}"
+            return f"SAM2 loaded via transformers: {model_id} ({dtype})"
         except Exception as exc_tf:  # noqa: BLE001
             tf_error = str(exc_tf)
             logger.info("transformers SAM2 unavailable: %s", exc_tf)
@@ -229,6 +235,17 @@ class ObjectIsolator:
         return out, "rembg"
 
     def unload(self) -> None:
+        pred = self._sam2_predictor
+        rembg = self._rembg_session
         self._sam2_predictor = None
         self._rembg_session = None
-        empty_cache()
+        self.backend_in_use = None
+        release: list[Any] = [rembg]
+        if isinstance(pred, dict):
+            release.append(pred.get("model"))
+            release.append(pred.get("predictor"))
+            release.append(pred.get("processor"))
+        else:
+            release.append(pred)
+        # Isolator is not torch.compiled; keep Flux/SDXL compile caches.
+        hard_release(*release, reset_compiler=False)

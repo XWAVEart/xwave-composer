@@ -85,6 +85,8 @@ class ComposerSession:
     layer_cutout: bool = True
     # Reject out-of-order canvas transform events (Gradio can deliver late).
     _last_transform_ts: dict[str, int] = field(default_factory=dict, repr=False)
+    # True when pose fields changed without recomposing last_work (live drag).
+    _work_stale: bool = field(default=False, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def __post_init__(self) -> None:
@@ -141,6 +143,14 @@ class ComposerSession:
             parts.append(f"rembg ✗ ({exc})")
         self.status = f"{' · '.join(parts)} | {gpu_summary()}"
         return self.status
+
+    def ensure_work_composed(self) -> Image.Image:
+        """Return an up-to-date WORK image, recomposing if pose-only edits pending."""
+        with self._lock:
+            if self._work_stale or self.last_work is None:
+                self.last_work = compose_work_image(self.doc)
+                self._work_stale = False
+            return self.last_work
 
     @property
     def compute_profile(self) -> str:
@@ -216,12 +226,18 @@ class ComposerSession:
     def generate_background(self, prompt: str, seed: int = -1) -> Image.Image:
         with self._lock:
             self.status = "Generating background with Flux…"
-            img = self.flux.generate_background(
-                prompt=prompt,
-                width=self.doc.width,
-                height=self.doc.height,
-                seed=seed if seed >= 0 else None,
-            )
+            width = self.doc.width
+            height = self.doc.height
+            flux = self.flux
+        assert flux is not None
+        # Flux runs outside the session lock so canvas transforms stay responsive.
+        img = flux.generate_background(
+            prompt=prompt,
+            width=width,
+            height=height,
+            seed=seed if seed >= 0 else None,
+        )
+        with self._lock:
             self.doc.background = img
             self.doc.background_prompt = prompt
             self._save_layer_image(img, "background")
@@ -245,13 +261,18 @@ class ComposerSession:
         """
         with self._lock:
             self.status = "Generating object with Flux…"
-            img = self.flux.generate_object(
-                object_prompt=prompt,
-                isolation_prompt=isolation_prompt,
-                width=min(1024, self.doc.width),
-                height=min(1024, self.doc.height),
-                seed=seed if seed >= 0 else None,
-            )
+            width = min(1024, self.doc.width)
+            height = min(1024, self.doc.height)
+            flux = self.flux
+        assert flux is not None
+        img = flux.generate_object(
+            object_prompt=prompt,
+            isolation_prompt=isolation_prompt,
+            width=width,
+            height=height,
+            seed=seed if seed >= 0 else None,
+        )
+        with self._lock:
             self.pending_raw = img
             self.pending_prompt = prompt
             self.pending_isolation_prompt = isolation_prompt
@@ -260,52 +281,34 @@ class ComposerSession:
                 self.status = "Object generated. Run isolate to add it to WORK."
                 return img
 
-            # prefer=None honors config isolation.preferred (SAM2 center-point,
-            # rembg fallback happens inside the isolator).
-            return self._isolate_pending_unlocked(click_xy=None, prefer=prefer)
+        # prefer=None honors config isolation.preferred (SAM2 center-point,
+        # rembg fallback happens inside the isolator).
+        return self.isolate_pending(click_xy=None, prefer=prefer)
 
-    def _isolate_pending_unlocked(
+    def _commit_isolated_object(
         self,
-        click_xy: tuple[float, float] | None = None,
-        prefer: str | None = None,
+        raw: Image.Image,
+        rgba: Image.Image,
+        backend: str,
+        prompt: str,
+        isolation_prompt: str,
     ) -> Image.Image:
-        """Isolate pending raw and add object layer. Caller must hold self._lock."""
-        if self.pending_raw is None:
-            self.status = "No pending object to isolate."
-            if self.last_work is None:
-                self.last_work = compose_work_image(self.doc)
-            return self.last_work
-
-        self.status = "Isolating object…"
-        try:
-            rgba, backend = self.isolator.isolate(
-                self.pending_raw, click_xy=click_xy, prefer=prefer
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Isolation failed")
-            # Still add the raw RGB as an opaque layer so WORK updates.
-            rgba = self.pending_raw.convert("RGBA")
-            backend = f"none (isolation error: {exc})"
-
-        # Sanity: ensure some visible alpha exists
+        """Add an isolated RGBA as a new object layer. Caller must hold self._lock."""
         if rgba.mode != "RGBA":
             rgba = rgba.convert("RGBA")
-        alpha = rgba.getchannel("A")
-        extrema = alpha.getextrema()
+        extrema = rgba.getchannel("A").getextrema()
         if extrema is not None and extrema[1] == 0:
-            # Fully transparent mask — fall back to full opacity so layer is visible
             logger.warning("Isolation produced empty alpha; using opaque object image.")
-            rgba = self.pending_raw.convert("RGBA")
+            rgba = raw.convert("RGBA")
             backend = f"{backend}+opaque_fallback"
 
         layer = ObjectLayer(
             name=f"Object {len(self.doc.objects) + 1}",
-            prompt=self.pending_prompt,
-            isolation_prompt=self.pending_isolation_prompt,
+            prompt=prompt,
+            isolation_prompt=isolation_prompt,
             image=rgba,
-            raw_image=self.pending_raw.copy(),
+            raw_image=raw.copy(),
         )
-        # Fit large objects so they do not cover the whole canvas by default
         max_dim = max(rgba.width, rgba.height, 1)
         target = min(self.doc.width, self.doc.height) * 0.45
         if max_dim > target:
@@ -315,8 +318,6 @@ class ComposerSession:
 
         self.doc.add_object(layer)
         self._save_layer_image(rgba, f"object_{layer.id}")
-        # Clear pending so re-isolate cannot double-add the same raw image.
-        # Raw stays on layer.raw_image for SAM2 re-cut.
         self.pending_raw = None
         self.last_work = compose_work_image(self.doc)
         self.status = (
@@ -325,6 +326,41 @@ class ComposerSession:
         )
         return self.last_work
 
+    def _isolate_pending_unlocked(
+        self,
+        click_xy: tuple[float, float] | None = None,
+        prefer: str | None = None,
+    ) -> Image.Image:
+        """Isolate pending raw and add object layer. Caller must hold self._lock.
+
+        Prefer :meth:`isolate_pending` for UI paths — it releases the lock
+        during the isolator GPU/CPU work.
+        """
+        if self.pending_raw is None:
+            self.status = "No pending object to isolate."
+            if self.last_work is None:
+                self.last_work = compose_work_image(self.doc)
+            return self.last_work
+
+        self.status = "Isolating object…"
+        raw = self.pending_raw
+        try:
+            rgba, backend = self.isolator.isolate(
+                raw, click_xy=click_xy, prefer=prefer
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Isolation failed")
+            rgba = raw.convert("RGBA")
+            backend = f"none (isolation error: {exc})"
+
+        return self._commit_isolated_object(
+            raw,
+            rgba,
+            backend,
+            self.pending_prompt,
+            self.pending_isolation_prompt,
+        )
+
     def isolate_pending(
         self,
         click_xy: tuple[float, float] | None = None,
@@ -332,7 +368,36 @@ class ComposerSession:
     ) -> Image.Image | None:
         """Isolate pending raw image and add as object layer."""
         with self._lock:
-            return self._isolate_pending_unlocked(click_xy=click_xy, prefer=prefer)
+            if self.pending_raw is None:
+                self.status = "No pending object to isolate."
+                if self.last_work is None:
+                    self.last_work = compose_work_image(self.doc)
+                return self.last_work
+            self.status = "Isolating object…"
+            raw = self.pending_raw.copy()
+            prompt = self.pending_prompt
+            isolation_prompt = self.pending_isolation_prompt
+            isolator = self.isolator
+        assert isolator is not None
+        try:
+            rgba, backend = isolator.isolate(
+                raw, click_xy=click_xy, prefer=prefer
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Isolation failed")
+            rgba = raw.convert("RGBA")
+            backend = f"none (isolation error: {exc})"
+        with self._lock:
+            # Another generate may have replaced pending; only commit if raw still matches.
+            if self.pending_raw is None:
+                return self.last_work or compose_work_image(self.doc)
+            return self._commit_isolated_object(
+                self.pending_raw,
+                rgba,
+                backend,
+                prompt,
+                isolation_prompt,
+            )
 
     def add_object_from_image(
         self,
@@ -454,55 +519,74 @@ class ComposerSession:
         object layer -> Flux object (+ optional isolation) replacing its image."""
         with self._lock:
             sid = self.doc.selected_id
-            if sid in (None, "__bg__"):
-                return self.generate_background(prompt, seed=seed)
-            obj = self.doc.selected()
-            if obj is None:
-                return self.generate_background(prompt, seed=seed)
+            obj = self.doc.selected() if sid not in (None, "__bg__") else None
+            if sid in (None, "__bg__") or obj is None:
+                go_background = True
+            else:
+                go_background = False
+                obj_id = obj.id
+                iso = (
+                    (isolation_prompt or obj.isolation_prompt or "").strip()
+                    if isolate
+                    else ""
+                )
+                width = min(1024, self.doc.width)
+                height = min(1024, self.doc.height)
+                flux = self.flux
+                isolator = self.isolator
+                self.status = "Generating object with Flux…"
 
-            self.status = "Generating object with Flux…"
-            if isolate:
-                iso = (isolation_prompt or obj.isolation_prompt or "").strip()
-                raw = self.flux.generate_object(
-                    object_prompt=prompt,
-                    isolation_prompt=iso,
-                    width=min(1024, self.doc.width),
-                    height=min(1024, self.doc.height),
-                    seed=seed if seed >= 0 else None,
-                )
-            else:
-                # Full-image placement: no plain-backdrop coaxing, no cutout.
-                iso = ""
-                raw = self.flux.generate(
-                    prompt=prompt,
-                    width=min(1024, self.doc.width),
-                    height=min(1024, self.doc.height),
-                    seed=seed if seed >= 0 else None,
-                )
-            if not isolate:
-                rgba, backend = raw.convert("RGBA"), "full image (no cutout)"
-            else:
+        if go_background:
+            return self.generate_background(prompt, seed=seed)
+
+        assert flux is not None
+        if isolate:
+            raw = flux.generate_object(
+                object_prompt=prompt,
+                isolation_prompt=iso,
+                width=width,
+                height=height,
+                seed=seed if seed >= 0 else None,
+            )
+        else:
+            # Full-image placement: no plain-backdrop coaxing, no cutout.
+            raw = flux.generate(
+                prompt=prompt,
+                width=width,
+                height=height,
+                seed=seed if seed >= 0 else None,
+            )
+
+        if not isolate:
+            rgba, backend = raw.convert("RGBA"), "full image (no cutout)"
+        else:
+            assert isolator is not None
+            with self._lock:
                 self.status = "Isolating object…"
-                try:
-                    rgba, backend = self.isolator.isolate(raw, prefer=None)
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("Isolation failed")
-                    rgba, backend = raw.convert("RGBA"), f"none ({exc})"
-                if rgba.mode != "RGBA":
-                    rgba = rgba.convert("RGBA")
-                extrema = rgba.getchannel("A").getextrema()
-                if extrema is not None and extrema[1] == 0:
-                    logger.warning("Isolation produced empty alpha; using opaque image.")
-                    rgba = raw.convert("RGBA")
-                    backend = f"{backend}+opaque_fallback"
+            try:
+                rgba, backend = isolator.isolate(raw, prefer=None)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Isolation failed")
+                rgba, backend = raw.convert("RGBA"), f"none ({exc})"
+            if rgba.mode != "RGBA":
+                rgba = rgba.convert("RGBA")
+            extrema = rgba.getchannel("A").getextrema()
+            if extrema is not None and extrema[1] == 0:
+                logger.warning("Isolation produced empty alpha; using opaque image.")
+                rgba = raw.convert("RGBA")
+                backend = f"{backend}+opaque_fallback"
 
+        with self._lock:
+            obj = self.doc.find_by_id(obj_id)
+            if obj is None:
+                self.status = "Selected layer disappeared during generate."
+                return self.last_work or compose_work_image(self.doc)
             first_image = obj.image is None
             obj.prompt = prompt
             obj.isolation_prompt = iso
             obj.image = rgba
             obj.raw_image = raw.copy()
             if first_image:
-                # Fit so a new object doesn't cover the whole canvas.
                 max_dim = max(rgba.width, rgba.height, 1)
                 target = min(self.doc.width, self.doc.height) * 0.45
                 if max_dim > target:
@@ -524,9 +608,17 @@ class ComposerSession:
             if obj is None or obj.raw_image is None:
                 self.status = "Select an object that has a raw image."
                 return self.last_work
-            rgba, backend = self.isolator.isolate(
-                obj.raw_image, click_xy=click_xy, prefer=prefer
-            )
+            obj_id = obj.id
+            raw = obj.raw_image.copy()
+            isolator = self.isolator
+            self.status = "Isolating object…"
+        assert isolator is not None
+        rgba, backend = isolator.isolate(raw, click_xy=click_xy, prefer=prefer)
+        with self._lock:
+            obj = self.doc.find_by_id(obj_id)
+            if obj is None:
+                self.status = "Selected layer disappeared during re-isolate."
+                return self.last_work
             obj.image = rgba
             self.last_work = compose_work_image(self.doc)
             self.status = f"Re-isolated via {backend}."
@@ -536,6 +628,7 @@ class ComposerSession:
     def refresh_work(self) -> Image.Image:
         with self._lock:
             self.last_work = compose_work_image(self.doc)
+            self._work_stale = False
             return self.last_work
 
     def set_canvas_size(self, width: int, height: int) -> Image.Image:
@@ -751,13 +844,18 @@ class ComposerSession:
         scale_y: float | None = None,
         rotation: float | None = None,
         opacity: float | None = None,
+        *,
+        compose: bool = True,
     ) -> Image.Image:
+        """Update a layer pose. Live drags pass ``compose=False`` to skip Pillow."""
         with self._lock:
             obj = self.doc.find_by_id(layer_id)
             if obj is None:
                 return self.refresh_work()
             self.doc.selected_id = layer_id
-            return self._apply_transform(obj, x, y, scale_x, scale_y, rotation, opacity)
+            return self._apply_transform(
+                obj, x, y, scale_x, scale_y, rotation, opacity, compose=compose
+            )
 
     def _apply_transform(
         self,
@@ -768,6 +866,8 @@ class ComposerSession:
         scale_y: float | None,
         rotation: float | None,
         opacity: float | None,
+        *,
+        compose: bool = True,
     ) -> Image.Image:
         t = obj.transform
         if x is not None:
@@ -782,8 +882,14 @@ class ComposerSession:
             t.rotation = float(rotation)
         if opacity is not None:
             t.opacity = max(0.0, min(1.0, float(opacity)))
-        self.last_work = compose_work_image(self.doc)
-        return self.last_work
+        if compose:
+            self.last_work = compose_work_image(self.doc)
+            self._work_stale = False
+            return self.last_work
+        # Live drag: keep doc poses current; defer expensive compose until
+        # pointer-up / OUTPUT refine.
+        self._work_stale = True
+        return self.last_work or compose_work_image(self.doc)
 
     def select_layer(self, label: str | None) -> ObjectLayer | None:
         with self._lock:
@@ -860,45 +966,54 @@ class ComposerSession:
         When prompt_locked is set, the user's custom_prompt is used as-is.
         When LLM rewrite is enabled (and not locked), Qwen2.5-VL rewrites
         the concatenation using the WORK canvas for composition only.
+
+        Always runs under ``self._lock`` so Flux unload / Qwen load cannot
+        race unlocked UI callers or debounce workers.
         """
-        s = self.output_settings
-        if s.prompt_locked and str(s.custom_prompt or "").strip():
-            self.last_output_prompt = str(s.custom_prompt).strip()
-            return self.last_output_prompt
-
-        preset = self.styles.active if self.styles else None
-        concat = build_output_prompt(
-            self.doc,
-            preset,
-            order=s.concat_order,
-            manual_prefix=s.manual_prefix if s.manual_style else None,
-            manual_suffix=s.manual_suffix if s.manual_style else None,
-        )
-        self.last_concat_prompt = concat
-
-        if s.use_llm_rewrite and concat.strip():
-            cache_key = self._prompt_rewrite_cache_key(concat)
-            if cache_key == self._rewrite_cache_key and self._rewrite_cache_result:
-                self.last_output_prompt = self._rewrite_cache_result
-                self.status = "LLM rewrite ready (cached)."
+        with self._lock:
+            s = self.output_settings
+            if s.prompt_locked and str(s.custom_prompt or "").strip():
+                self.last_output_prompt = str(s.custom_prompt).strip()
                 return self.last_output_prompt
-            try:
-                rewritten = self._rewrite_with_vram_headroom(concat)
-                if rewritten.strip() and rewritten.strip() != concat.strip():
-                    self.last_output_prompt = rewritten.strip()
-                    self._rewrite_cache_key = cache_key
-                    self._rewrite_cache_result = self.last_output_prompt
-                    self.status = "LLM rewrite ready."
+
+            preset = self.styles.active if self.styles else None
+            concat = build_output_prompt(
+                self.doc,
+                preset,
+                order=s.concat_order,
+                manual_prefix=s.manual_prefix if s.manual_style else None,
+                manual_suffix=s.manual_suffix if s.manual_style else None,
+            )
+            self.last_concat_prompt = concat
+
+            if s.use_llm_rewrite and concat.strip():
+                cache_key = self._prompt_rewrite_cache_key(concat)
+                if cache_key == self._rewrite_cache_key and self._rewrite_cache_result:
+                    self.last_output_prompt = self._rewrite_cache_result
+                    self.status = "LLM rewrite ready (cached)."
                     return self.last_output_prompt
-                self.status = "LLM rewrite returned unchanged text — using concatenation."
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("LLM rewrite failed: %s", exc)
-                self.status = f"LLM rewrite failed, using concatenation: {exc}"
-        self.last_output_prompt = concat
-        return concat
+                try:
+                    rewritten = self._rewrite_with_vram_headroom(concat)
+                    if rewritten.strip() and rewritten.strip() != concat.strip():
+                        self.last_output_prompt = rewritten.strip()
+                        self._rewrite_cache_key = cache_key
+                        self._rewrite_cache_result = self.last_output_prompt
+                        self.status = "LLM rewrite ready."
+                        return self.last_output_prompt
+                    self.status = (
+                        "LLM rewrite returned unchanged text — using concatenation."
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("LLM rewrite failed: %s", exc)
+                    self.status = f"LLM rewrite failed, using concatenation: {exc}"
+            self.last_output_prompt = concat
+            return concat
 
     def _prompt_rewrite_cache_key(self, concat: str) -> str:
-        """Key rewrites by style/text and a cheap WORK-canvas fingerprint."""
+        """Key rewrites by style/text and a cheap WORK-canvas fingerprint.
+
+        Caller must hold ``self._lock``.
+        """
         digest = hashlib.sha1(concat.encode("utf-8"))
         if self.last_work is not None:
             sample = self.last_work.convert("RGB")
@@ -908,7 +1023,11 @@ class ComposerSession:
         return digest.hexdigest()
 
     def _rewrite_with_vram_headroom(self, concat: str) -> str:
-        """Drop Flux, run Qwen-VL beside SDXL, then release Qwen."""
+        """Drop Flux, run Qwen-VL beside SDXL, then release Qwen.
+
+        Caller must hold ``self._lock`` for the entire unload → rewrite →
+        unload choreography so generation cannot touch Flux mid-flight.
+        """
         keep_llm = bool(self.config.get("llm", "keep_loaded", default=False))
         flux_was = bool(self.flux and self.flux.ready)
 
@@ -937,6 +1056,7 @@ class ComposerSession:
                 style_name = preset.name if preset else ""
                 style_prefix = preset.prefix if preset else ""
                 style_suffix = preset.suffix if preset else ""
+            assert self.llm is not None
             return self.llm.rewrite(
                 concat,
                 reference_image=self.last_work,
@@ -974,10 +1094,24 @@ class ComposerSession:
         threading.Thread(target=_reload, daemon=True, name="flux-warm-reload").start()
 
     def run_output(self, work_image: Image.Image | None = None) -> Image.Image:
-        """Run SDXL Hyper img2img on the WORK composition."""
+        """Run SDXL Hyper img2img on the WORK composition.
+
+        Snapshot under the session lock; prompt build (incl. LLM) takes the
+        lock on its own; SDXL refine runs unlocked so canvas transforms are
+        not blocked for the full inference.
+        """
         with self._lock:
-            work = work_image or self.last_work or compose_work_image(self.doc)
-            self.last_work = work
+            if work_image is not None:
+                work = work_image
+                self.last_work = work
+                self._work_stale = False
+            elif self._work_stale or self.last_work is None:
+                work = compose_work_image(self.doc)
+                self.last_work = work
+                self._work_stale = False
+            else:
+                work = self.last_work
+            work_snap = work.copy()
             if not self.core_ready:
                 # Never replace an accepted OUTPUT with WORK while SDXL is
                 # temporarily unloaded (e.g. during a SeedVR2 export).
@@ -986,34 +1120,50 @@ class ComposerSession:
                     self.last_output = work
                     self.output_rev += 1
                 return self.last_output
-            prompt = self.build_prompt()
-            if not prompt.strip():
-                prompt = "high quality image, detailed"
-            # Sticky seed: never leave OUTPUT to chance mid-session.
+
+        # May unload Flux under lock for Qwen; do not hold our outer critical
+        # section across this call (RLock would still block other waiters).
+        prompt = self.build_prompt()
+        if not prompt.strip():
+            prompt = "high quality image, detailed"
+
+        with self._lock:
+            if not self.core_ready:
+                self.status = "SDXL not ready — OUTPUT left unchanged."
+                if self.last_output is None:
+                    self.last_output = work_snap
+                    self.output_rev += 1
+                return self.last_output
             if self.output_settings.seed < 0:
                 self.output_settings.seed = random.randint(0, 2_147_483_647)
+            refine_kwargs = {
+                "init_image": work_snap,
+                "prompt": prompt,
+                "negative_prompt": self.output_settings.negative_prompt,
+                "denoise": self.output_settings.denoise,
+                "steps": self.output_settings.steps,
+                "seed": int(self.output_settings.seed),
+                "guidance_scale": self.output_settings.cfg,
+                "eta": self.output_settings.eta,
+            }
+            sdxl = self.sdxl
             self.status = "Refining OUTPUT with SDXL Hyper…"
-            try:
-                out = self.sdxl.refine(
-                    init_image=work,
-                    prompt=prompt,
-                    negative_prompt=self.output_settings.negative_prompt,
-                    denoise=self.output_settings.denoise,
-                    steps=self.output_settings.steps,
-                    seed=int(self.output_settings.seed),
-                    guidance_scale=self.output_settings.cfg,
-                    eta=self.output_settings.eta,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("OUTPUT refine failed")
+
+        assert sdxl is not None
+        try:
+            out = sdxl.refine(**refine_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("OUTPUT refine failed")
+            with self._lock:
                 self.status = f"OUTPUT failed: {exc}"
-                # Keep the last good OUTPUT when possible; only fall back to
-                # WORK if nothing has been refined yet.
                 if self.last_output is None:
-                    self.last_output = work
+                    self.last_output = work_snap
                     self.output_rev += 1
+                result = self.last_output
                 self._schedule_flux_reload()
-                return self.last_output
+            return result
+
+        with self._lock:
             self.last_output = out
             self.output_rev += 1
             self.status = "OUTPUT updated."
@@ -1023,30 +1173,45 @@ class ComposerSession:
     # ------------------------------------------------------------------- export
     def refine_final(self, steps: int, denoise: float) -> Image.Image:
         """Refine the current OUTPUT again without replacing the WORK source."""
+        if self.last_output is None:
+            self.run_output()
+
         with self._lock:
-            if self.last_output is None:
-                self.run_output()
             source = self.last_output
             if source is None:
                 raise RuntimeError("No OUTPUT image is available to refine.")
-            prompt = self.last_output_prompt or self.build_prompt()
-            if not prompt.strip():
-                prompt = "high quality image, detailed"
+            source_snap = source.copy()
+            prompt = self.last_output_prompt or ""
+            neg = self.output_settings.negative_prompt
+            seed = int(self.output_settings.seed)
+            cfg = self.output_settings.cfg
+            eta = self.output_settings.eta
+            sdxl = self.sdxl
             self.status = "Refining the current OUTPUT with SDXL Hyper…"
-            try:
-                image = self.sdxl.refine(
-                    init_image=source,
-                    prompt=prompt,
-                    negative_prompt=self.output_settings.negative_prompt,
-                    denoise=float(denoise),
-                    steps=int(steps),
-                    seed=int(self.output_settings.seed),
-                    guidance_scale=self.output_settings.cfg,
-                    eta=self.output_settings.eta,
-                )
-            except Exception as exc:  # noqa: BLE001
+
+        if not prompt.strip():
+            prompt = self.build_prompt()
+        if not prompt.strip():
+            prompt = "high quality image, detailed"
+
+        assert sdxl is not None
+        try:
+            image = sdxl.refine(
+                init_image=source_snap,
+                prompt=prompt,
+                negative_prompt=neg,
+                denoise=float(denoise),
+                steps=int(steps),
+                seed=seed,
+                guidance_scale=cfg,
+                eta=eta,
+            )
+        except Exception as exc:  # noqa: BLE001
+            with self._lock:
                 self.status = f"Final OUTPUT refinement failed: {exc}"
-                raise
+            raise
+
+        with self._lock:
             self.last_output = image
             self.output_rev += 1
             self.status = (
@@ -1061,25 +1226,27 @@ class ComposerSession:
         seedvr2_options: dict[str, object] | None = None,
     ) -> tuple[Image.Image, Path]:
         """Upscale the currently accepted OUTPUT and save it."""
+        # Ensure OUTPUT without holding the lock across SDXL.
+        if self.last_output is None:
+            self.run_output()
+
         with self._lock:
-            # Ensure we have a current OUTPUT
-            if self.last_output is None:
-                self.run_output()
             source = self.last_output or self.last_work or compose_work_image(self.doc)
-
-            # Optional final refine with more steps before upscale
-            if refine_steps and refine_steps > 0:
-                old_steps = self.output_settings.steps
-                self.output_settings.steps = int(refine_steps)
-                try:
-                    source = self.run_output(self.last_work)
-                finally:
-                    self.output_settings.steps = old_steps
-
+            source = source.copy()
+            need_step_refine = bool(refine_steps and refine_steps > 0)
+            denoise = float(self.output_settings.denoise)
             seedvr2_export = (
                 str(self.config.get("export", "upscaler", default="seedvr2")).lower()
                 == "seedvr2"
             )
+
+        if need_step_refine:
+            # Same semantics as refine_final: deeper img2img on accepted OUTPUT.
+            source = self.refine_final(
+                steps=int(refine_steps), denoise=denoise
+            ).copy()
+
+        with self._lock:
             if seedvr2_export:
                 self.status = "Freeing VRAM for export-only SeedVR2…"
                 if self.flux:
@@ -1088,21 +1255,30 @@ class ComposerSession:
                     self.sdxl.unload()
                 if self.llm:
                     self.llm.unload()
+                if self.isolator:
+                    self.isolator.unload()
                 empty_cache()
+            self.status = (
+                "Upscaling final export with SeedVR2…"
+                if seedvr2_export
+                else "Upscaling export (2x)…"
+            )
+            upscaler = self.upscaler
 
-            self.status = "Upscaling final export with SeedVR2…" if seedvr2_export else "Upscaling export (2x)…"
-            try:
-                path = self.upscaler.save_export(
-                    source,
-                    stem="xwave_export",
-                    seedvr2_options=seedvr2_options,
-                )
-                backend = self.upscaler.backend or "upscaler"
-            finally:
-                # SeedVR2 runs in a child process, so all of its allocations
-                # are gone here. Restore SDXL before returning so the very next
-                # edit is processed instead of falling back to the WORK image.
-                if seedvr2_export:
+        assert upscaler is not None
+        try:
+            path = upscaler.save_export(
+                source,
+                stem="xwave_export",
+                seedvr2_options=seedvr2_options,
+            )
+            backend = upscaler.backend or "upscaler"
+        finally:
+            # SeedVR2 runs in a child process, so all of its allocations
+            # are gone here. Restore SDXL before returning so the very next
+            # edit is processed instead of falling back to the WORK image.
+            if seedvr2_export:
+                with self._lock:
                     self.upscaler.unload()
                     empty_cache()
                     if self.sdxl and not self.sdxl.ready:
@@ -1119,13 +1295,15 @@ class ComposerSession:
                         self.flux and not self.flux.ready
                     )
                     self._schedule_flux_reload()
-            exported = Image.open(path).convert("RGB")
+
+        exported = Image.open(path).convert("RGB")
+        with self._lock:
             restored = bool(self.sdxl and self.sdxl.ready)
             self.status = (
                 f"Exported {exported.width}×{exported.height} via {backend}: {path}"
                 + (" · SDXL ready" if restored else " · SDXL not ready")
             )
-            return exported, path
+        return exported, path
 
     # ------------------------------------------------------------------- helpers
     def _save_layer_image(self, image: Image.Image, name: str) -> Path:

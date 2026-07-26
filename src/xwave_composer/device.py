@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import logging
+from typing import Any
 
 import torch
 
@@ -16,6 +17,39 @@ def empty_cache() -> None:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
+
+
+def hard_release(*objects: Any, reset_compiler: bool = True) -> None:
+    """Best-effort reclaim of GPU-resident modules / pipelines.
+
+    Moves objects to CPU when possible, drops references, optionally resets
+    ``torch.compiler`` caches (needed after regional compile), then empties
+    the CUDA caching allocator.
+    """
+    for obj in objects:
+        if obj is None:
+            continue
+        try:
+            to_fn = getattr(obj, "to", None)
+            if callable(to_fn):
+                to_fn("cpu")
+        except Exception:  # noqa: BLE001
+            logger.debug("hard_release: to(cpu) failed for %s", type(obj).__name__)
+        try:
+            del obj
+        except Exception:  # noqa: BLE001
+            pass
+    if reset_compiler:
+        try:
+            torch.compiler.reset()
+        except Exception:  # noqa: BLE001
+            pass
+    empty_cache()
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.synchronize()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def gpu_summary() -> str:

@@ -30,9 +30,10 @@
     viewScale: 1,
     lastSceneB64: "",
     liveTimer: null,
-    // After a drag, keep local poses until the hold expires so a late
-    // Gradio scene rewrite cannot snap the layer backward.
+    // After a drag, keep only that layer's local pose until the hold expires
+    // (or the server catches up) so late scene HTML cannot snap it backward.
     holdTransformsUntil: 0,
+    holdLayerId: null,
   };
 
   function $(id) {
@@ -106,16 +107,29 @@
     return img;
   }
 
-  function holdingTransforms() {
-    return !!state.drag || Date.now() < state.holdTransformsUntil;
+  function heldLayerId() {
+    if (state.drag) return state.selectedId || null;
+    if (Date.now() < state.holdTransformsUntil) return state.holdLayerId;
+    return null;
+  }
+
+  function posesMatch(a, b) {
+    if (!a || !b) return false;
+    return (
+      Math.abs((a.x || 0) - (b.x || 0)) < 0.5 &&
+      Math.abs((a.y || 0) - (b.y || 0)) < 0.5 &&
+      Math.abs((a.scale_x || 1) - (b.scale_x || 1)) < 0.001 &&
+      Math.abs((a.scale_y || 1) - (b.scale_y || 1)) < 0.001 &&
+      Math.abs((a.rotation || 0) - (b.rotation || 0)) < 0.05
+    );
   }
 
   function applyScene(data) {
     if (!data || typeof data !== "object") return;
     state.canvasW = data.width || 1024;
     state.canvasH = data.height || 1024;
-    // Prefer the optimistic local selection when the user just clicked a card.
-    if (data.selected_id != null && !holdingTransforms()) {
+    // Prefer the optimistic local selection while the pointer is down.
+    if (data.selected_id != null && !state.drag) {
       state.selectedId = data.selected_id || null;
     } else if (data.selected_id != null && !state.selectedId) {
       state.selectedId = data.selected_id || null;
@@ -131,10 +145,10 @@
 
     const prev = {};
     const localPose = {};
-    const keepPose = holdingTransforms();
+    const keepId = heldLayerId();
     state.layers.forEach(function (l) {
       if (l._img) prev[l.id] = l._img;
-      if (keepPose) {
+      if (keepId && l.id === keepId) {
         localPose[l.id] = {
           x: l.x,
           y: l.y,
@@ -152,11 +166,17 @@
           : loadImage(layer.data_url, null);
       const pose = localPose[layer.id];
       if (pose) {
-        layer.x = pose.x;
-        layer.y = pose.y;
-        layer.scale_x = pose.scale_x;
-        layer.scale_y = pose.scale_y;
-        layer.rotation = pose.rotation;
+        // Server caught up — drop the hold so inspector edits apply immediately.
+        if (posesMatch(pose, layer)) {
+          state.holdTransformsUntil = 0;
+          state.holdLayerId = null;
+        } else {
+          layer.x = pose.x;
+          layer.y = pose.y;
+          layer.scale_x = pose.scale_x;
+          layer.scale_y = pose.scale_y;
+          layer.rotation = pose.rotation;
+        }
       }
       return layer;
     });
@@ -413,8 +433,9 @@
       clearTimeout(state.liveTimer);
       state.liveTimer = null;
     }
-    // Hold local pose briefly so late scene HTML cannot snap backward.
-    state.holdTransformsUntil = Date.now() + 1200;
+    // Hold only the dragged layer briefly so late scene HTML cannot snap it.
+    state.holdLayerId = state.selectedId;
+    state.holdTransformsUntil = Date.now() + 600;
     emitTransform(true);
   }
 

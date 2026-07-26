@@ -42,6 +42,9 @@ def test_final_refine_uses_output_without_replacing_work(tmp_path):
 
     refined = session.refine_final(steps=8, denoise=0.2)
 
-    assert fake_sdxl.init_image is output
+    # Refine snapshots OUTPUT (copy) so WORK edits cannot mutate the init mid-flight.
+    assert fake_sdxl.init_image is not None
+    assert fake_sdxl.init_image.size == output.size
+    assert fake_sdxl.init_image.getpixel((0, 0)) == output.getpixel((0, 0))
     assert session.last_work is work
     assert session.last_output is refined

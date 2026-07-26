@@ -65,6 +65,52 @@ def test_run_output_preserves_accepted_output_when_sdxl_unloaded(tmp_path):
     assert fake.calls == 0
 
 
+def test_live_transform_defers_compose_until_final(tmp_path):
+    session = _session(tmp_path)
+    layer = ObjectLayer(
+        name="Move me",
+        prompt="subject",
+        image=Image.new("RGBA", (16, 16), (255, 0, 0, 255)),
+    )
+    session.doc.add_object(layer)
+    session.doc.selected_id = layer.id
+    before = session.refresh_work()
+
+    session.update_transform_by_id(layer.id, x=80.0, y=90.0, compose=False)
+
+    assert session._work_stale is True
+    assert layer.transform.x == 80.0
+    assert session.last_work is before
+
+    composed = session.ensure_work_composed()
+    assert session._work_stale is False
+    assert composed is not before
+
+
+def test_run_output_releases_lock_during_refine(tmp_path):
+    """Canvas transforms must be able to take the session lock while SDXL runs."""
+    session = _session(tmp_path)
+    acquired_during_refine = []
+
+    class LockCheckingSDXL(FakeSDXL):
+        def refine(self, *, init_image, **kwargs):
+            got = session._lock.acquire(blocking=False)
+            acquired_during_refine.append(got)
+            if got:
+                session._lock.release()
+            return super().refine(init_image=init_image, **kwargs)
+
+    session.sdxl = LockCheckingSDXL(ready=True)
+    session.last_work = Image.new("RGB", (32, 32), "red")
+    session.output_settings.seed = 1
+
+    out = session.run_output()
+
+    assert acquired_during_refine == [True]
+    assert out is not None
+    assert session.output_rev == 1
+
+
 def test_mute_excludes_prompt_from_concatenation(tmp_path):
     session = _session(tmp_path)
     session.doc.background_prompt = "studio backdrop"

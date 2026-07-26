@@ -19,7 +19,7 @@ import torch
 from PIL import Image
 
 from xwave_composer.config import AppConfig
-from xwave_composer.device import empty_cache, gpu_summary
+from xwave_composer.device import empty_cache, gpu_summary, hard_release
 
 logger = logging.getLogger(__name__)
 
@@ -284,8 +284,12 @@ class PromptRewriter:
         return text
 
     def unload(self) -> None:
+        model = self.model
+        processor = self.processor
         self.model = None
         self.processor = None
         self.model_id_loaded = None
         self._runtime_device = None
-        empty_cache()
+        # Qwen is not torch.compiled here; skip compiler.reset to avoid
+        # blowing Flux/SDXL compile caches when we only need VL headroom.
+        hard_release(model, processor, reset_compiler=False)

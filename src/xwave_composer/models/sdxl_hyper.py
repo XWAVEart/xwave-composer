@@ -15,7 +15,7 @@ import torch
 from PIL import Image
 
 from xwave_composer.config import AppConfig
-from xwave_composer.device import empty_cache, gpu_summary
+from xwave_composer.device import empty_cache, gpu_summary, hard_release
 from xwave_composer.optimization import (
     OptimizationReport,
     compile_component,
@@ -402,21 +402,23 @@ class SDXLHyperPipeline:
                 torch.compiler.cudagraph_mark_step_begin()
             except Exception:  # noqa: BLE001
                 pass
-        try:
-            result = self.pipe(**call_kwargs)
-        except TypeError:
-            # Older signatures
-            result = self.pipe(
-                prompt=prompt,
-                image=init,
-                strength=max(0.01, min(1.0, denoise)),
-                num_inference_steps=max(1, steps),
-            )
+        with torch.inference_mode():
+            try:
+                result = self.pipe(**call_kwargs)
+            except TypeError:
+                # Older signatures
+                result = self.pipe(
+                    prompt=prompt,
+                    image=init,
+                    strength=max(0.01, min(1.0, denoise)),
+                    num_inference_steps=max(1, steps),
+                )
 
         out = result.images[0]
         return out.convert("RGB")
 
     def unload(self) -> None:
+        pipe = self.pipe
         self.pipe = None
         self.loaded_loras.clear()
         self.loaded_embeddings.clear()
@@ -425,4 +427,4 @@ class SDXLHyperPipeline:
             requested=self.profile,
             applied=f"unloaded (next: {profile_label(self.profile)})",
         )
-        empty_cache()
+        hard_release(pipe, reset_compiler=True)

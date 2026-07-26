@@ -13,7 +13,7 @@ import torch
 from PIL import Image
 
 from xwave_composer.config import AppConfig
-from xwave_composer.device import empty_cache, gpu_summary
+from xwave_composer.device import empty_cache, gpu_summary, hard_release
 from xwave_composer.optimization import (
     OptimizationReport,
     compile_component,
@@ -163,6 +163,7 @@ class FluxGenerator:
         return self.load()
 
     def unload(self) -> None:
+        pipe = self.pipe
         self.pipe = None
         self.model_id_loaded = None
         self.optimization_report = OptimizationReport(
@@ -170,7 +171,9 @@ class FluxGenerator:
             requested=self.profile,
             applied=f"unloaded (next: {profile_label(self.profile)})",
         )
-        empty_cache()
+        # Regional compile pins Inductor/CUDA caches — reset so SeedVR2 / LLM
+        # headroom is real, not just a cleared Python reference.
+        hard_release(pipe, reset_compiler=True)
 
     def ensure_loaded(self) -> None:
         if self.pipe is None:
@@ -210,32 +213,35 @@ class FluxGenerator:
             "guidance_scale": float(guidance),
             "generator": generator,
         }
-        # Optional kwargs some Flux pipelines accept
-        sig = getattr(self.pipe, "__call__", None)
         if self.optimization_report.compiled:
             try:
                 torch.compiler.cudagraph_mark_step_begin()
             except Exception:  # noqa: BLE001
                 pass
-        try:
-            call_kwargs["max_sequence_length"] = max_seq
-            if negative_prompt:
-                call_kwargs["negative_prompt"] = negative_prompt
-            result = self.pipe(**call_kwargs)
-        except TypeError:
-            # Retry with a minimal argument set
-            minimal = {
-                "prompt": prompt,
-                "width": int(width),
-                "height": int(height),
-                "num_inference_steps": int(steps),
-                "generator": generator,
-            }
+        with torch.inference_mode():
             try:
-                minimal["guidance_scale"] = float(guidance)
-                result = self.pipe(**minimal)
+                call_kwargs["max_sequence_length"] = max_seq
+                if negative_prompt:
+                    call_kwargs["negative_prompt"] = negative_prompt
+                result = self.pipe(**call_kwargs)
             except TypeError:
-                result = self.pipe(prompt=prompt, num_inference_steps=int(steps), generator=generator)
+                # Retry with a minimal argument set
+                minimal = {
+                    "prompt": prompt,
+                    "width": int(width),
+                    "height": int(height),
+                    "num_inference_steps": int(steps),
+                    "generator": generator,
+                }
+                try:
+                    minimal["guidance_scale"] = float(guidance)
+                    result = self.pipe(**minimal)
+                except TypeError:
+                    result = self.pipe(
+                        prompt=prompt,
+                        num_inference_steps=int(steps),
+                        generator=generator,
+                    )
 
         image = result.images[0]
         if image.mode != "RGB":

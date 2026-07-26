@@ -138,12 +138,7 @@ def _data_url(key: str, img: Image.Image | None, max_side: int) -> str | None:
 
 
 def _work(session: ComposerSession) -> Image.Image:
-    if session.last_work is not None:
-        return session.last_work
-    from xwave_composer.canvas.compositor import compose_work_image
-
-    session.last_work = compose_work_image(session.doc)
-    return session.last_work
+    return session.ensure_work_composed()
 
 
 def _blank(w: int = 1024, h: int = 1024) -> Image.Image:
@@ -358,7 +353,13 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
     # Debounced OUTPUT refresh driven by canvas transforms
     out_lock = threading.Lock()
-    out_state: dict[str, Any] = {"token": 0, "running": False, "dirty": False}
+    out_state: dict[str, Any] = {
+        "token": 0,
+        "running": False,
+        "dirty": False,
+        # Sticky: composition changed while SDXL was unloaded (export / free).
+        "pending": False,
+    }
 
     def run_output_now() -> Image.Image:
         try:
@@ -371,11 +372,22 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             session.status = f"OUTPUT error: {exc}"
             return session.last_output or _work(session)
 
+    def flush_pending_output() -> None:
+        """Run a deferred OUTPUT refine after SDXL becomes ready again."""
+        with out_lock:
+            should = out_state["pending"] or out_state["dirty"]
+            out_state["pending"] = False
+        if should and session.core_ready:
+            mark_output_dirty(delay_override=0.05)
+
     def mark_output_dirty(delay_override: float | None = None) -> None:
-        if not session.core_ready:
-            return  # never trigger a surprise model download from a drag
         with out_lock:
             out_state["dirty"] = True
+            if not session.core_ready:
+                # Never trigger a surprise model download from a drag — remember
+                # the request and flush after Load / post-export SDXL restore.
+                out_state["pending"] = True
+                return
             out_state["token"] += 1
             token = out_state["token"]
         delay = (
@@ -400,6 +412,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 if not session.core_ready:
                     with out_lock:
                         out_state["dirty"] = True
+                        out_state["pending"] = True
                     return
                 run_output_now()
             finally:
@@ -1078,7 +1091,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             s.seed = int(oseed)
 
         def on_load():
-            return session.preload_core()
+            msg = session.preload_core()
+            flush_pending_output()
+            return msg
 
         def on_free():
             return session.free_optional()
@@ -1106,10 +1121,13 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                     # OUTPUT on a rejected final: a newer live pose may
                     # already be applied without having scheduled refine.
                     if final is True:
+                        session.ensure_work_composed()
                         mark_output_dirty(delay_override=0.05)
                     return tuple(gr.update() for _ in pack_out)
                 if ts:
                     session._last_transform_ts[lid] = ts
+                # Live drags: pose fields only. Pointer-up / legacy: compose WORK.
+                is_final = final is True or final is None
                 session.update_transform_by_id(
                     lid,
                     x=data.get("x"),
@@ -1117,8 +1135,10 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                     scale_x=data.get("scale_x"),
                     scale_y=data.get("scale_y"),
                     rotation=data.get("rotation"),
+                    compose=is_final,
                 )
-                session.status = "Transforming…"
+                if final is not True:
+                    session.status = "Transforming…"
                 # Older tabs (opened before the canvas JS update) omit
                 # ``final``. Keep those functional until the user refreshes;
                 # current tabs send false while dragging and true on release.
@@ -1612,7 +1632,10 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
         def on_export(model, color, input_noise, latent_noise, seed):
             # Cancel any sleeping OUTPUT debounce while SeedVR2 owns the GPU.
+            # Keep a sticky pending bit so mid-export edits refine after restore.
             with out_lock:
+                if out_state["dirty"]:
+                    out_state["pending"] = True
                 out_state["dirty"] = False
                 out_state["token"] += 1
             try:
@@ -1625,13 +1648,15 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         "seed": int(seed),
                     }
                 )
+                flush_pending_output()
                 return str(path), str(path), session.status
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Export failed")
+                flush_pending_output()
                 return None, "", f"Export failed: {exc}"
 
         def poll_output(last_rev):
-            """Refresh OUTPUT + scene when the composition changed (any tab)."""
+            """Refresh OUTPUT when output_rev advances (cheap no-op otherwise)."""
             if session.last_output is None or session.output_rev == last_rev:
                 return (
                     gr.skip(), session.status, gr.skip(), last_rev,
@@ -1895,7 +1920,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             outputs=[export_image, export_path, status],
         )
 
-        timer = gr.Timer(0.2)
+        # 0.75s: less contention with concurrency=1 than 200ms; OUTPUT still
+        # feels timely after a refine (poll already no-ops when rev unchanged).
+        timer = gr.Timer(0.75)
         timer.tick(
             poll_output,
             inputs=[rev_state],
