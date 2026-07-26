@@ -31,6 +31,23 @@ def test_compose_background_flip_x():
     assert out.getpixel((56, 16))[0] > 200  # red on right after flip
 
 
+def test_object_layer_flip_x():
+    # Left half red, right half blue — flip X should swap them around center.
+    rgba = Image.new("RGBA", (32, 16), (0, 0, 255, 255))
+    for x in range(16):
+        for y in range(16):
+            rgba.putpixel((x, y), (255, 0, 0, 255))
+    layer = ObjectLayer(
+        name="flip",
+        image=rgba,
+        transform=LayerTransform(x=16, y=8, scale_x=1.0, scale_y=1.0, flip_x=True),
+    )
+    placed = transform_object_layer(layer, 32, 16)
+    assert placed is not None
+    assert placed.getpixel((4, 8))[2] > 200  # blue on left after flip
+    assert placed.getpixel((28, 8))[0] > 200  # red on right after flip
+
+
 def test_feather_alpha_inward_softens_edge():
     from xwave_composer.canvas.compositor import feather_alpha_inward
 

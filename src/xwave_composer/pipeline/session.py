@@ -645,12 +645,24 @@ class ComposerSession:
         scale_y: float | None = None,
         rotation: float | None = None,
         opacity: float | None = None,
+        flip_x: bool | None = None,
+        flip_y: bool | None = None,
     ) -> Image.Image:
         with self._lock:
             obj = self.doc.selected()
             if obj is None:
                 return self.refresh_work()
-            return self._apply_transform(obj, x, y, scale_x, scale_y, rotation, opacity)
+            return self._apply_transform(
+                obj,
+                x,
+                y,
+                scale_x,
+                scale_y,
+                rotation,
+                opacity,
+                flip_x=flip_x,
+                flip_y=flip_y,
+            )
 
     def reset_selected_transform(self) -> Image.Image:
         """Reset selected layer pose. BG → scale/rotation/flip; object → center."""
@@ -675,6 +687,8 @@ class ComposerSession:
             t.scale_x = 1.0
             t.scale_y = 1.0
             t.rotation = 0.0
+            t.flip_x = False
+            t.flip_y = False
             self.last_work = compose_work_image(self.doc)
             self.status = f"Reset transform for {obj.name or obj.id}."
             return self.last_work
@@ -844,6 +858,8 @@ class ComposerSession:
         scale_y: float | None = None,
         rotation: float | None = None,
         opacity: float | None = None,
+        flip_x: bool | None = None,
+        flip_y: bool | None = None,
         *,
         compose: bool = True,
     ) -> Image.Image:
@@ -854,7 +870,16 @@ class ComposerSession:
                 return self.refresh_work()
             self.doc.selected_id = layer_id
             return self._apply_transform(
-                obj, x, y, scale_x, scale_y, rotation, opacity, compose=compose
+                obj,
+                x,
+                y,
+                scale_x,
+                scale_y,
+                rotation,
+                opacity,
+                flip_x=flip_x,
+                flip_y=flip_y,
+                compose=compose,
             )
 
     def _apply_transform(
@@ -866,6 +891,8 @@ class ComposerSession:
         scale_y: float | None,
         rotation: float | None,
         opacity: float | None,
+        flip_x: bool | None = None,
+        flip_y: bool | None = None,
         *,
         compose: bool = True,
     ) -> Image.Image:
@@ -882,6 +909,10 @@ class ComposerSession:
             t.rotation = float(rotation)
         if opacity is not None:
             t.opacity = max(0.0, min(1.0, float(opacity)))
+        if flip_x is not None:
+            t.flip_x = bool(flip_x)
+        if flip_y is not None:
+            t.flip_y = bool(flip_y)
         if compose:
             self.last_work = compose_work_image(self.doc)
             self._work_stale = False

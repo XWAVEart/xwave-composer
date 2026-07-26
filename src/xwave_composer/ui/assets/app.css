@@ -153,40 +153,432 @@ footer {
 }
 
 .xwave-import {
-  min-height: 100px !important;
+  min-height: 80px !important;
 }
 
-.xwave-import-cutout {
-  margin-top: -2px !important;
+.xwave-cutout-mode {
+  margin: 2px 0 0 !important;
+  padding: 0 !important;
+}
+
+.xwave-cutout-mode .wrap {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: 6px !important;
+  width: 100% !important;
+}
+
+.xwave-cutout-mode label {
+  flex: 1 1 0 !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  padding: 3px 6px !important;
+  font-size: 0.72rem !important;
+  min-height: 26px !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  background: var(--xw-panel-2) !important;
+  box-sizing: border-box !important;
+}
+
+/* ── Layer inspector: dense transform strips ── */
+.xwave-xform-strip {
+  align-items: flex-end !important;
+  gap: 4px 6px !important;
+  margin: 0 !important;
+  flex-wrap: wrap !important;
+  overflow: visible !important;
+}
+
+/* Gradio nests Number/Checkbox into one .form — force a horizontal toolbar */
+.xwave-xform-strip > .form,
+.xwave-xform-strip > .block,
+.xwave-xform-strip .form {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: flex-end !important;
+  gap: 4px 6px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: visible !important;
+  width: 100% !important;
+}
+
+.xwave-xform-strip .block,
+.xwave-xform-strip .svelte-90oupt,
+.xwave-xform-strip [data-testid="number"],
+.xwave-xform-strip [data-testid="checkbox"] {
+  flex: 1 1 0 !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 48px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Dedicated flip row: two equal toggles, never clipped */
+.xwave-flip-row .form {
+  flex-wrap: nowrap !important;
+  gap: 8px !important;
+}
+
+.xwave-flip-row .block,
+.xwave-flip-row [data-testid="checkbox"],
+.xwave-flip-row .xwave-mini-check {
+  flex: 1 1 50% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+
+.xwave-flip-row label,
+.xwave-flip-row .label-wrap {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 6px !important;
+  width: 100% !important;
+  min-height: 26px !important;
+  padding: 2px 8px !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  background: var(--xw-panel-2) !important;
+  box-sizing: border-box !important;
+}
+
+.xwave-flip-row input[type="checkbox"] {
+  display: inline-block !important;
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  max-width: 14px !important;
+  margin: 0 !important;
+  flex: 0 0 14px !important;
+  accent-color: var(--xw-accent) !important;
+}
+
+.xwave-xform-strip .wrap {
+  gap: 0 !important;
+}
+
+.xwave-xform-strip label span,
+.xwave-xform-strip .label-wrap span {
+  font-size: 0.6rem !important;
+  line-height: 1.15 !important;
+  margin: 0 !important;
+}
+
+.xwave-mini label span {
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: nowrap !important;
+}
+
+.xwave-mini input[type="number"] {
+  padding: 2px 4px !important;
+  font-size: 0.7rem !important;
+  font-family: var(--xw-mono) !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: 26px !important;
+}
+
+.xwave-mini input[type="number"]::-webkit-outer-spin-button,
+.xwave-mini input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+
+.xwave-mini input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.xwave-xform-strip button[title*="Reset"],
+.xwave-xform-strip .reset-button {
+  display: none !important;
+}
+
+.xwave-mini-check {
+  align-self: flex-end !important;
+  padding-bottom: 2px !important;
+}
+
+/* Keep flip toggles as a horizontal pair, not a stacked column */
+.xwave-mini-check .wrap,
+.xwave-mini-check label {
+  flex-direction: row !important;
+  width: 100% !important;
+}
+
+/* Gradio "info" under checkboxes blows the strip height — hide if present */
+.xwave-mini-check .info,
+.xwave-mini-check .svelte-1gfkn6j,
+.xwave-xform-strip .info {
+  display: none !important;
+}
+
+.xwave-mini-check label,
+.xwave-mini-check .label-wrap {
+  display: flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+}
+
+.xwave-mini-check span {
+  font-size: 0.62rem !important;
+  letter-spacing: 0.01em;
+}
+
+.xwave-mini-check input[type="checkbox"] {
+  width: 14px !important;
+  height: 14px !important;
+  margin: 0 !important;
+}
+
+.xwave-mini-slider {
+  min-width: 100px !important;
+  flex: 1 1 120px !important;
+}
+
+.xwave-mini-slider .wrap {
+  gap: 0 !important;
+}
+
+.xwave-mini-slider input[type="number"] {
+  min-width: 40px !important;
+  max-width: 56px !important;
+  padding: 2px 4px !important;
+  font-size: 0.7rem !important;
+  font-family: var(--xw-mono) !important;
+}
+
+.xwave-mini-slider .min_value,
+.xwave-mini-slider .max_value {
+  display: none !important;
+}
+
+.xwave-mini-dd {
+  min-width: 96px !important;
+  flex: 1 1 110px !important;
+}
+
+.xwave-action-row {
+  align-items: center !important;
+  gap: 4px !important;
+  margin: 0 !important;
+  flex-wrap: wrap !important;
+}
+
+.xwave-action-row button {
+  font-size: 0.72rem !important;
+  padding: 2px 8px !important;
+  min-height: 26px !important;
+}
+
+.xwave-iso-row {
+  align-items: center !important;
+  gap: 8px !important;
+  margin: 0 !important;
+  flex-wrap: nowrap !important;
+}
+
+.xwave-iso-row .form,
+.xwave-iso-row .block {
+  margin: 0 !important;
+  padding: 0 !important;
+  flex-shrink: 0 !important;
+}
+
+.xwave-iso-row button {
+  min-height: 28px !important;
+  font-size: 0.72rem !important;
+  padding: 2px 10px !important;
+  flex-shrink: 0 !important;
+}
+
+.xwave-gen-btn {
+  min-width: 36px !important;
+  max-width: 40px !important;
+  padding: 2px 6px !important;
+  font-size: 0.95rem !important;
+  line-height: 1 !important;
+}
+
+/* Seed expands into leftover row width (esp. background: just ▶️ + seed). */
+.xwave-iso-seed,
+.xwave-iso-row .xwave-seed {
+  flex: 1 1 auto !important;
+  min-width: 88px !important;
+  max-width: none !important;
+}
+
+.xwave-iso-seed input,
+.xwave-iso-row .xwave-seed input {
+  width: 100% !important;
+  min-width: 0 !important;
+  font-family: var(--xw-mono) !important;
+  font-size: 0.78rem !important;
+  text-align: right !important;
+}
+
+/* Gradio leaves empty .form shells (grey 1px borders) when every child
+   component is visibility-hidden. Collapse those rows; avoid :has(input,
+   button) — Gradio's CSS rewriter mangles comma lists inside :has(). */
+.xwave-obj-xform:not(:has(.block)),
+.xwave-bg-xform:not(:has(.block)) {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: none !important;
+}
+
+.xwave-xform-strip > .form:not(:has(.block)),
+.xwave-flip-row > .form:not(:has(.block)) {
+  display: none !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+}
+
+.xwave-cutout-chk {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  max-width: 44px !important;
+}
+
+.xwave-cutout-chk label,
+.xwave-cutout-chk .label-wrap {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+  margin: 0 !important;
+  padding: 2px 8px !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  background: var(--xw-panel-2) !important;
+  min-height: 28px !important;
+  min-width: 36px !important;
+  white-space: nowrap !important;
+  box-sizing: border-box !important;
+}
+
+.xwave-cutout-chk span {
+  font-size: 0.95rem !important;
+  line-height: 1 !important;
+}
+
+.xwave-cutout-chk input[type="checkbox"] {
+  position: absolute !important;
+  opacity: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  pointer-events: none !important;
+}
+
+.xwave-cutout-chk:has(input:checked) label,
+.xwave-cutout-chk:has(input:checked) .label-wrap {
+  border-color: var(--xw-accent) !important;
+  background: var(--xw-accent-dim) !important;
+}
+
+.xwave-iso-swatch {
+  flex: 0 0 auto !important;
+  min-width: 36px !important;
+  max-width: 40px !important;
+  padding: 2px 6px !important;
+  font-size: 0.95rem !important;
+  line-height: 1 !important;
+}
+
+.xwave-compact-radio .wrap {
+  display: flex !important;
+  gap: 6px !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  width: auto !important;
+}
+
+.xwave-compact-radio label {
+  margin: 0 !important;
 }
 .xwave-topbar {
-  margin-bottom: 8px !important;
+  margin-bottom: 6px !important;
+  align-items: stretch !important;
+  gap: 8px !important;
 }
 
 .xwave-topbar > .column {
   background: var(--xw-panel) !important;
   border: 1px solid var(--xw-border-soft) !important;
   border-radius: var(--xw-radius) !important;
-  padding: 6px 10px !important;
-  justify-content: center !important;
+  padding: 4px 8px !important;
+  justify-content: flex-start !important;
+  gap: 4px !important;
 }
 
 .xwave-bar-row {
   align-items: center !important;
   gap: 6px !important;
+  margin: 0 !important;
 }
 
-/* VRAM meter */
+.xwave-performance-buttons {
+  align-items: center !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  flex-wrap: nowrap !important;
+}
+
+.xwave-performance-buttons > .form {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.xwave-performance-buttons button {
+  flex: 1 1 0 !important;
+  min-width: 64px !important;
+}
+
+/* VRAM meter — sits left of BF16/MXFP8/NVFP4; Gradio HTML
+   wrappers default to full row width, so clamp them hard. */
 .xwave-vram-block {
   flex: 0 0 auto !important;
-  min-width: 110px !important;
+  width: auto !important;
+  max-width: 130px !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+}
+
+.xwave-performance-buttons .xwave-vram-block,
+.xwave-performance-buttons .xwave-vram-block .html-container,
+.xwave-performance-buttons .xwave-vram-block .prose {
+  width: auto !important;
+  max-width: 130px !important;
+  flex: 0 0 auto !important;
 }
 
 .xwave-vram {
-  display: flex;
+  display: inline-flex !important;
   align-items: center;
   gap: 6px;
   line-height: 1;
+  width: auto !important;
+  max-width: 130px !important;
 }
 
 .xwave-vram-bar {
@@ -230,6 +622,13 @@ footer {
   color: var(--xw-text-dim) !important;
   background: rgba(0, 0, 0, 0.25) !important;
   border: 1px solid var(--xw-border-soft) !important;
+  min-height: 28px !important;
+  padding: 3px 8px !important;
+}
+
+.xwave-topbar button.sm {
+  min-height: 28px !important;
+  padding: 2px 10px !important;
 }
 
 /* ── canvases: flush top, perfectly side by side ── */
@@ -283,13 +682,20 @@ footer {
   border: none !important;
 }
 
-/* knob strip in the top bar, above the OUTPUT canvas */
+/* knob strip — centered in its panel, spread across the width */
+.xwave-knob-col {
+  justify-content: center !important;
+}
+
 .xwave-knob-row {
-  align-items: flex-end !important;
-  gap: 6px 8px !important;
+  align-items: center !important;
+  gap: 0 !important;
   margin: 0 !important;
-  flex-wrap: wrap !important;
+  width: 100% !important;
+  flex: 1 1 auto !important;
+  flex-wrap: nowrap !important;
   overflow: visible !important;
+  min-height: 0 !important;
 }
 
 .xwave-export-btn {
@@ -299,22 +705,91 @@ footer {
 
 .xwave-knob {
   overflow: visible !important;
+  padding: 0 !important;
 }
 
 .xwave-topbar .form,
 .xwave-knob-row .form {
   overflow: visible !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.xwave-knob-row > .form {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  width: 100% !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.xwave-knob-row .block,
+.xwave-knob.block {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  min-width: 0 !important;
+}
+
+.xwave-knob-row .xwave-knob-num {
+  flex: 0 0 60px !important;
+  width: 60px !important;
+  max-width: 64px !important;
+}
+
+.xwave-knob-row .xwave-knob-slider {
+  flex: 1 1 160px !important;
+  width: auto !important;
+  max-width: 260px !important;
+  min-width: 130px !important;
+}
+
+.xwave-knob .label-wrap,
+.xwave-knob span[data-testid="block-info"] {
+  font-size: 0.7rem !important;
+  line-height: 1.15 !important;
+  margin: 0 0 2px !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
 }
 
 .xwave-knob .wrap {
-  gap: 1px !important;
+  gap: 2px !important;
 }
 
 .xwave-knob input[type="number"] {
   padding: 3px 6px !important;
   font-size: 0.76rem !important;
   font-family: var(--xw-mono) !important;
-  min-width: 52px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 64px !important;
+  min-height: 28px !important;
+  box-sizing: border-box !important;
+}
+
+.xwave-knob-slider .slider_input_container,
+.xwave-knob-slider .wrap {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+.xwave-knob-slider input[type="range"] {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+.xwave-knob-slider input[type="number"] {
+  max-width: 48px !important;
+  min-width: 44px !important;
+  flex: 0 0 48px !important;
 }
 
 /* spinner arrows steal width from the value on compact knobs */
@@ -329,7 +804,7 @@ footer {
   appearance: textfield;
 }
 
-/* hide reset ↺ buttons and shrink min/max labels on the knob strip */
+/* hide reset ↺ and min/max chrome on the knob strip */
 .xwave-knob-row button[title*="Reset"],
 .xwave-knob-row .reset-button {
   display: none !important;
@@ -338,8 +813,7 @@ footer {
 .xwave-knob .slider_input_container span,
 .xwave-knob .min_value,
 .xwave-knob .max_value {
-  font-size: 0.58rem !important;
-  opacity: 0.5;
+  display: none !important;
 }
 
 /* ── bottom: layers | panels ── */
@@ -353,7 +827,7 @@ footer {
   letter-spacing: 0.14em !important;
   text-transform: uppercase !important;
   color: var(--xw-text-dim) !important;
-  margin: 0 0 4px 1px !important;
+  margin: 0 0 2px 1px !important;
 }
 
 .xwave-layers-head {
@@ -374,13 +848,99 @@ footer {
   width: 100%;
 }
 
+/* Canvas size dropdown + Apply share one bordered control box */
 .xwave-canvas-size {
-  margin-top: 8px;
-  align-items: end;
+  margin-top: 8px !important;
+  align-items: stretch !important;
+  gap: 0 !important;
+  flex-wrap: nowrap !important;
+  background: var(--xw-panel-2) !important;
+  border: 1px solid var(--xw-border-soft) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  padding: 4px 6px 5px !important;
+  overflow: hidden !important;
+}
+
+.xwave-canvas-size > .form {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.xwave-canvas-size .block,
+.xwave-canvas-aspect.block {
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.xwave-canvas-size .label-wrap,
+.xwave-canvas-size span[data-testid="block-info"] {
+  font-size: 0.66rem !important;
+  margin: 0 0 2px !important;
+  padding: 0 !important;
+  line-height: 1.1 !important;
+}
+
+.xwave-canvas-apply {
+  align-self: flex-end !important;
+  margin: 0 0 1px 6px !important;
+  min-height: 28px !important;
+  min-width: 56px !important;
+  padding: 2px 10px !important;
+  font-size: 0.72rem !important;
+  flex-shrink: 0 !important;
 }
 
 .xwave-seed-row {
   align-items: end;
+}
+
+.xwave-style-seed {
+  align-items: center !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  flex-wrap: nowrap !important;
+}
+
+.xwave-style-seed .form,
+.xwave-style-seed .block {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.xwave-style-seed-num {
+  flex: 1 1 auto !important;
+  min-width: 88px !important;
+  max-width: none !important;
+}
+
+.xwave-style-seed-num input {
+  width: 100% !important;
+  min-width: 0 !important;
+  font-family: var(--xw-mono) !important;
+  font-size: 0.78rem !important;
+  text-align: right !important;
+}
+
+.xwave-roll-seed {
+  min-width: 36px !important;
+  max-width: 40px !important;
+  padding: 2px 6px !important;
+  min-height: 28px !important;
+  font-size: 0.95rem !important;
+  line-height: 1 !important;
+  flex-shrink: 0 !important;
+}
+
+.xwave-style-opts {
+  margin: 2px 0 0 !important;
 }
 
 .xwave-built-prompt {
@@ -504,8 +1064,14 @@ footer {
   background: var(--xw-panel) !important;
   border: 1px solid var(--xw-border-soft) !important;
   border-radius: var(--xw-radius) !important;
-  padding: 8px 10px 10px !important;
-  gap: 6px !important;
+  padding: 6px 8px 8px !important;
+  gap: 4px !important;
+}
+
+.xwave-panel > .form,
+.xwave-panel > .block {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
 }
 
 .xwave-seed input {

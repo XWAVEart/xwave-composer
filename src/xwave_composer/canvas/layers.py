@@ -24,6 +24,8 @@ class LayerTransform:
     scale_x: float = 1.0
     scale_y: float = 1.0
     rotation: float = 0.0
+    flip_x: bool = False
+    flip_y: bool = False
     visible: bool = True
     opacity: float = 1.0
 
@@ -34,6 +36,8 @@ class LayerTransform:
             "scale_x": self.scale_x,
             "scale_y": self.scale_y,
             "rotation": self.rotation,
+            "flip_x": self.flip_x,
+            "flip_y": self.flip_y,
             "visible": self.visible,
             "opacity": self.opacity,
         }
@@ -46,6 +50,8 @@ class LayerTransform:
             scale_x=float(data.get("scale_x", 1.0)),
             scale_y=float(data.get("scale_y", 1.0)),
             rotation=float(data.get("rotation", 0.0)),
+            flip_x=bool(data.get("flip_x", False)),
+            flip_y=bool(data.get("flip_y", False)),
             visible=bool(data.get("visible", True)),
             opacity=float(data.get("opacity", 1.0)),
         )

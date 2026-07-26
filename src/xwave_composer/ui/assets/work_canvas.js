@@ -292,6 +292,8 @@
       ctx.rotate(((layer.rotation || 0) * Math.PI) / 180);
       ctx.globalAlpha = layer.opacity != null ? layer.opacity : 1;
       ctx.globalCompositeOperation = layer.blend_canvas || "source-over";
+      ctx.save();
+      ctx.scale(layer.flip_x ? -1 : 1, layer.flip_y ? -1 : 1);
       if (layer._img && layer._img.complete && layer._img.naturalWidth) {
         ctx.drawImage(layer._img, -sz.w / 2, -sz.h / 2, sz.w, sz.h);
       } else if (layer.data_url) {
@@ -303,6 +305,7 @@
         ctx.fillRect(-sz.w / 2, -sz.h / 2, sz.w, sz.h);
         ctx.strokeRect(-sz.w / 2, -sz.h / 2, sz.w, sz.h);
       }
+      ctx.restore();
       ctx.globalCompositeOperation = "source-over";
       ctx.restore();
     }

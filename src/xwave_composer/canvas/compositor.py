@@ -178,11 +178,17 @@ def transform_object_layer(
     t = layer.transform
 
     # Scale (stretch supported via independent scale_x / scale_y)
-    new_w = max(1, int(round(src.width * t.scale_x)))
-    new_h = max(1, int(round(src.height * t.scale_y)))
+    new_w = max(1, int(round(src.width * abs(float(t.scale_x)))))
+    new_h = max(1, int(round(src.height * abs(float(t.scale_y)))))
     if (new_w, new_h) != src.size:
         resample = Image.Resampling.LANCZOS
         src = src.resize((new_w, new_h), resample)
+
+    # Flip after scale, before rotate (matches WORK canvas + background path)
+    if bool(getattr(t, "flip_x", False)):
+        src = src.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    if bool(getattr(t, "flip_y", False)):
+        src = src.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
 
     # Opacity
     if t.opacity < 0.999:

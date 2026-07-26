@@ -80,12 +80,19 @@ def _output_jpeg_path(img: Image.Image) -> str:
     _OUTPUT_JPEG_CACHE[id(img)] = cached_path
     return cached_path
 
+# Label format: aspect · pixels. Portrait → square → landscape so 1:1 sits mid-list.
 ASPECT_PRESETS = {
-    "1024×1024": (1024, 1024),
-    "1152×896": (1152, 896),
-    "896×1152": (896, 1152),
-    "1216×832": (1216, 832),
+    "9:21 · 640×1536": (640, 1536),
+    "9:16 · 768×1344": (768, 1344),
+    "2:3 · 832×1216": (832, 1216),
+    "3:4 · 896×1152": (896, 1152),
+    "1:1 · 1024×1024": (1024, 1024),
+    "4:3 · 1152×896": (1152, 896),
+    "3:2 · 1216×832": (1216, 832),
+    "16:9 · 1344×768": (1344, 768),
+    "21:9 · 1536×640": (1536, 640),
 }
+DEFAULT_ASPECT = "1:1 · 1024×1024"
 
 NO_STYLE = "— none —"
 
@@ -98,7 +105,8 @@ CONCAT_ORDERS = {
 
 ISO_WHITE = "isolated on plain white background, centered"
 ISO_BLACK = "isolated on plain black background, centered"
-ISO_BACKDROPS = ("White", "Black")
+# Radio display labels are square emojis; values stay White/Black for session logic.
+# Isolation backdrop: stored as "White"/"Black"; UI uses emoji swatch buttons.
 
 
 def _iso_backdrop_label(prompt: str | None) -> str:
@@ -226,6 +234,8 @@ def _scene_dict(session: ComposerSession) -> dict[str, Any]:
                 "scale_x": float(obj.transform.scale_x),
                 "scale_y": float(obj.transform.scale_y),
                 "rotation": float(obj.transform.rotation),
+                "flip_x": bool(getattr(obj.transform, "flip_x", False)),
+                "flip_y": bool(getattr(obj.transform, "flip_y", False)),
                 "opacity": float(obj.transform.opacity),
                 "visible": bool(obj.transform.visible),
                 "blend_mode": blend,
@@ -280,7 +290,7 @@ def render_layers_html(session: ComposerSession) -> str:
             f'<div class="xwave-thumb"{thumb}></div>'
             f'<div class="xwave-card-text">{label}</div>'
             f'<button type="button" class="xwave-del" data-delete-id="{lid}" '
-            f'aria-label="Delete layer">×</button></div>'
+            f'title="Delete this layer" aria-label="Delete this layer">×</button></div>'
         )
     # Background card always last (bottom of stack)
     bg_url = _media_url("bg-thumb", session.doc.background, 96, cache_dir) or ""
@@ -309,7 +319,10 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "prompt": session.doc.background_prompt or "",
             "opacity": 1.0,
             "iso_backdrop": "White",
+            "scale": 1.0,
             "rotation": float(session.doc.bg_rotation),
+            "flip_x": False,
+            "flip_y": False,
             "feather": 0.0,
             "blend_mode": "Normal",
             "raw": None,
@@ -328,7 +341,10 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "prompt": "",
             "opacity": 1.0,
             "iso_backdrop": "White",
+            "scale": 1.0,
             "rotation": 0.0,
+            "flip_x": False,
+            "flip_y": False,
             "feather": 0.0,
             "blend_mode": "Normal",
             "raw": None,
@@ -340,12 +356,17 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "bg_flip_x": False,
             "bg_flip_y": False,
         }
+    sx = abs(float(obj.transform.scale_x))
+    sy = abs(float(obj.transform.scale_y))
     return {
         "kind": "object",
         "prompt": obj.prompt or "",
         "opacity": float(obj.transform.opacity),
         "iso_backdrop": _iso_backdrop_label(obj.isolation_prompt),
+        "scale": (sx + sy) * 0.5,
         "rotation": float(obj.transform.rotation),
+        "flip_x": bool(getattr(obj.transform, "flip_x", False)),
+        "flip_y": bool(getattr(obj.transform, "flip_y", False)),
         "feather": float(getattr(obj, "feather", 0.0)),
         "blend_mode": blend_mode_label(getattr(obj, "blend_mode", "normal")),
         "raw": obj.raw_image,
@@ -402,8 +423,12 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
     cw, ch = config.canvas_size
 
     css = (ASSETS / "app.css").read_text(encoding="utf-8") if (ASSETS / "app.css").exists() else ""
-    js = (ASSETS / "work_canvas.js").read_text(encoding="utf-8") if (ASSETS / "work_canvas.js").exists() else ""
-    head_js = f"<script>\n{js}\n</script>"
+    js_parts: list[str] = []
+    for name in ("work_canvas.js", "tooltips.js"):
+        path = ASSETS / name
+        if path.exists():
+            js_parts.append(path.read_text(encoding="utf-8"))
+    head_js = "<script>\n" + "\n".join(js_parts) + "\n</script>" if js_parts else ""
     theme = _build_theme()
 
     style_names = [NO_STYLE] + (session.styles.names() if session.styles else [])
@@ -512,9 +537,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         include_output: bool | None = None,
     ) -> tuple:
         """-> work_html, layers_html, output, status,
-        insp_prompt, iso_backdrop, insp_opacity, insp_feather, insp_blend,
+        insp_prompt, iso_backdrop, iso_white_btn, iso_black_btn,
+        insp_opacity, insp_feather, insp_blend,
         raw_view, prompt_view,
-        llm_prompt_view, mute_prompt_btn, cutout_chk, obj_rotation,
+        llm_prompt_view, mute_prompt_btn, cutout_chk, cutout_mode,
+        obj_scale, obj_rotation, obj_flip_x, obj_flip_y,
         bg_scale, bg_rotation, bg_offset_x, bg_offset_y, bg_flip_x, bg_flip_y
 
         Set include_work/include_layers False for lightweight responses that
@@ -580,10 +607,18 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             output_update,
             session.status,
             gr.update(value=insp["prompt"], interactive=fields_on),
+            insp["iso_backdrop"],
             gr.update(
-                value=insp["iso_backdrop"],
-                interactive=cutout_on,
                 visible=cutout_on,
+                variant=(
+                    "primary" if insp["iso_backdrop"] == "White" else "secondary"
+                ),
+            ),
+            gr.update(
+                visible=cutout_on,
+                variant=(
+                    "primary" if insp["iso_backdrop"] == "Black" else "secondary"
+                ),
             ),
             gr.update(value=insp["opacity"], interactive=obj_on, visible=obj_on),
             gr.update(value=insp["feather"], interactive=obj_on, visible=obj_on),
@@ -592,18 +627,18 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             concat_val,
             gr.update(value=llm_val, visible=llm_on),
             gr.update(
-                value=(
-                    "Mute prompt"
-                    if insp["prompt_enabled"]
-                    else "Unmute prompt"
-                ),
+                value=("Mute" if insp["prompt_enabled"] else "Unmute"),
                 interactive=obj_on,
             ),
             gr.update(
                 value=bool(session.layer_cutout),
                 visible=obj_on,
             ),
+            gr.update(visible=obj_on),
+            gr.update(value=insp["scale"], visible=obj_on),
             gr.update(value=insp["rotation"], visible=obj_on),
+            gr.update(value=insp["flip_x"], visible=obj_on),
+            gr.update(value=insp["flip_y"], visible=obj_on),
             gr.update(value=insp["bg_scale"], visible=bg_on),
             gr.update(value=insp["bg_rotation"], visible=bg_on),
             gr.update(value=insp["bg_offset_x"], visible=bg_on),
@@ -651,28 +686,35 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         elem_classes=["xwave-status"],
                         container=False,
                     )
-                    vram_html = gr.HTML(
-                        value=render_vram_html(), padding=False,
-                        elem_classes=["xwave-vram-block"],
-                    )
                 active_profile = session.compute_profile
                 with gr.Row(elem_classes=["xwave-performance-buttons"]):
+                    vram_html = gr.HTML(
+                        value=render_vram_html(),
+                        padding=False,
+                        elem_classes=["xwave-vram-block"],
+                    )
                     bf16_btn = gr.Button(
                         "BF16",
                         size="sm",
+                        scale=1,
+                        min_width=64,
                         variant="primary" if active_profile == "bf16" else "secondary",
                     )
                     mxfp8_btn = gr.Button(
                         "MXFP8",
                         size="sm",
+                        scale=1,
+                        min_width=72,
                         variant="primary" if active_profile == "mxfp8" else "secondary",
                     )
                     nvfp4_btn = gr.Button(
                         "NVFP4",
                         size="sm",
+                        scale=1,
+                        min_width=72,
                         variant="primary" if active_profile == "nvfp4" else "secondary",
                     )
-            with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col"]):
+            with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col", "xwave-knob-col"]):
                 with gr.Row(elem_classes=["xwave-bar-row", "xwave-knob-row"]):
                     cfg = gr.Number(
                         value=session.output_settings.cfg,
@@ -681,26 +723,26 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         maximum=15.0,
                         step=0.1,
                         scale=0,
-                        min_width=64,
-                        elem_classes=["xwave-knob"],
+                        min_width=60,
+                        elem_classes=["xwave-knob", "xwave-knob-num"],
                     )
                     denoise = gr.Slider(
                         0.05, 0.95,
                         value=session.output_settings.denoise,
                         step=0.01,
                         label="Denoise",
-                        scale=3,
-                        min_width=100,
-                        elem_classes=["xwave-knob"],
+                        scale=1,
+                        min_width=140,
+                        elem_classes=["xwave-knob", "xwave-knob-slider"],
                     )
                     out_steps = gr.Slider(
                         1, 20,
                         value=session.output_settings.steps,
                         step=1,
                         label="Steps",
-                        scale=2,
-                        min_width=84,
-                        elem_classes=["xwave-knob"],
+                        scale=1,
+                        min_width=120,
+                        elem_classes=["xwave-knob", "xwave-knob-slider"],
                     )
                     eta = gr.Number(
                         value=session.output_settings.eta,
@@ -709,8 +751,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         maximum=1.0,
                         step=0.05,
                         scale=0,
-                        min_width=76,
-                        elem_classes=["xwave-knob"],
+                        min_width=60,
+                        elem_classes=["xwave-knob", "xwave-knob-num"],
                     )
         # ══ ROW 2 — canvases, perfectly side by side ═══════════════
         with gr.Row(elem_classes=["xwave-row", "xwave-canvases"], equal_height=False):
@@ -747,10 +789,17 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                     aspect = gr.Dropdown(
                         label="Canvas size",
                         choices=list(ASPECT_PRESETS.keys()),
-                        value="1024×1024",
-                        scale=2,
+                        value=DEFAULT_ASPECT,
+                        scale=1,
+                        elem_classes=["xwave-canvas-aspect"],
                     )
-                    apply_size_btn = gr.Button("Apply", size="sm", scale=0, min_width=70)
+                    apply_size_btn = gr.Button(
+                        "Apply",
+                        size="sm",
+                        scale=0,
+                        min_width=64,
+                        elem_classes=["xwave-canvas-apply"],
+                    )
 
             with gr.Column(scale=3, min_width=420, elem_classes=["xwave-col", "xwave-props-col"]):
                 with gr.Row(elem_classes=["xwave-props-grid"]):
@@ -764,25 +813,52 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             lines=2,
                             max_lines=3,
                         )
-                        iso_backdrop = gr.Radio(
-                            choices=list(ISO_BACKDROPS),
-                            value="White",
-                            label="Isolate on",
-                            visible=False,
-                        )
-                        cutout_chk = gr.Checkbox(
-                            label="Cut out object (uncheck to place the full image)",
-                            value=True,
-                            visible=False,
-                        )
-                        obj_rotation = gr.Number(
-                            label="Rotation °",
-                            value=0.0,
-                            precision=1,
-                            step=1.0,
-                            visible=False,
-                        )
-                        with gr.Row(elem_classes=["xwave-bg-xform"]):
+                        with gr.Row(elem_classes=["xwave-iso-row"]):
+                            cutout_chk = gr.Checkbox(
+                                label="✂️",
+                                value=True,
+                                visible=False,
+                                scale=0,
+                                min_width=40,
+                                elem_classes=["xwave-mini-check", "xwave-cutout-chk"],
+                            )
+                            iso_backdrop = gr.State(value="White")
+                            iso_white_btn = gr.Button(
+                                "⬜",
+                                size="sm",
+                                scale=0,
+                                min_width=36,
+                                visible=False,
+                                elem_classes=["xwave-iso-swatch", "xwave-iso-white"],
+                            )
+                            iso_black_btn = gr.Button(
+                                "⬛",
+                                size="sm",
+                                scale=0,
+                                min_width=36,
+                                visible=False,
+                                elem_classes=["xwave-iso-swatch", "xwave-iso-black"],
+                            )
+                            gen_btn = gr.Button(
+                                "▶️",
+                                variant="primary",
+                                size="sm",
+                                scale=0,
+                                min_width=40,
+                                elem_classes=["xwave-gen-btn"],
+                            )
+                            gen_seed = gr.Number(
+                                value=-1,
+                                precision=0,
+                                show_label=False,
+                                container=False,
+                                scale=1,
+                                min_width=88,
+                                elem_classes=["xwave-seed", "xwave-iso-seed"],
+                            )
+                        # Background pose (numbers) + flips on their own row
+                        # so FlipV never clips off the panel edge.
+                        with gr.Row(elem_classes=["xwave-xform-strip", "xwave-bg-xform"]):
                             bg_scale = gr.Number(
                                 label="Scale",
                                 value=1.0,
@@ -791,94 +867,183 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                                 maximum=8.0,
                                 step=0.05,
                                 visible=True,
+                                scale=1,
+                                min_width=56,
+                                elem_classes=["xwave-knob", "xwave-mini"],
                             )
                             bg_rotation = gr.Number(
-                                label="Rotation °",
+                                label="Rot°",
                                 value=0.0,
                                 precision=1,
                                 step=1.0,
                                 visible=True,
+                                scale=1,
+                                min_width=52,
+                                elem_classes=["xwave-knob", "xwave-mini"],
                             )
-                        with gr.Row(elem_classes=["xwave-bg-offset"]):
                             bg_offset_x = gr.Number(
-                                label="Offset X",
+                                label="X",
                                 value=0.0,
                                 precision=1,
                                 step=1.0,
                                 visible=True,
+                                scale=1,
+                                min_width=52,
+                                elem_classes=["xwave-knob", "xwave-mini"],
                             )
                             bg_offset_y = gr.Number(
-                                label="Offset Y",
+                                label="Y",
                                 value=0.0,
                                 precision=1,
                                 step=1.0,
                                 visible=True,
+                                scale=1,
+                                min_width=52,
+                                elem_classes=["xwave-knob", "xwave-mini"],
                             )
-                        with gr.Row(elem_classes=["xwave-bg-flip"]):
+                        with gr.Row(
+                            elem_classes=["xwave-xform-strip", "xwave-flip-row", "xwave-bg-xform"]
+                        ):
                             bg_flip_x = gr.Checkbox(
-                                label="Flip X", value=False, visible=True,
+                                label="Flip H",
+                                value=False,
+                                visible=True,
+                                scale=1,
+                                min_width=72,
+                                elem_classes=["xwave-mini-check"],
                             )
                             bg_flip_y = gr.Checkbox(
-                                label="Flip Y", value=False, visible=True,
+                                label="Flip V",
+                                value=False,
+                                visible=True,
+                                scale=1,
+                                min_width=72,
+                                elem_classes=["xwave-mini-check"],
                             )
-                        with gr.Row():
-                            gen_seed = gr.Number(
-                                value=-1, precision=0, show_label=False, container=False,
-                                scale=0, min_width=76, elem_classes=["xwave-seed"],
+                        # Object pose: scale / rotate / flip
+                        with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
+                            obj_scale = gr.Number(
+                                label="Scale",
+                                value=1.0,
+                                precision=3,
+                                minimum=0.05,
+                                maximum=8.0,
+                                step=0.05,
+                                visible=False,
+                                scale=1,
+                                min_width=56,
+                                elem_classes=["xwave-knob", "xwave-mini"],
                             )
-                            gen_btn = gr.Button(
-                                "⟡ Generate", variant="primary", size="sm", scale=1, min_width=110
+                            obj_rotation = gr.Number(
+                                label="Rot°",
+                                value=0.0,
+                                precision=1,
+                                step=1.0,
+                                visible=False,
+                                scale=1,
+                                min_width=52,
+                                elem_classes=["xwave-knob", "xwave-mini"],
                             )
-                        with gr.Row():
+                        with gr.Row(
+                            elem_classes=["xwave-xform-strip", "xwave-flip-row", "xwave-obj-xform"]
+                        ):
+                            obj_flip_x = gr.Checkbox(
+                                label="Flip H",
+                                value=False,
+                                visible=False,
+                                scale=1,
+                                min_width=72,
+                                elem_classes=["xwave-mini-check"],
+                            )
+                            obj_flip_y = gr.Checkbox(
+                                label="Flip V",
+                                value=False,
+                                visible=False,
+                                scale=1,
+                                min_width=72,
+                                elem_classes=["xwave-mini-check"],
+                            )
+                        # Object look: opacity / feather / blend
+                        with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
+                            insp_opacity = gr.Slider(
+                                0.0,
+                                1.0,
+                                value=1.0,
+                                step=0.01,
+                                label="Opacity",
+                                visible=False,
+                                scale=1,
+                                min_width=100,
+                                elem_classes=["xwave-mini-slider"],
+                            )
+                            insp_feather = gr.Slider(
+                                0.0,
+                                128.0,
+                                value=0.0,
+                                step=1.0,
+                                label="Feather",
+                                visible=False,
+                                scale=1,
+                                min_width=100,
+                                elem_classes=["xwave-mini-slider"],
+                            )
+                        with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
+                            insp_blend = gr.Dropdown(
+                                choices=BLEND_MODE_LABELS,
+                                value="Normal",
+                                label="Blend",
+                                visible=False,
+                                scale=1,
+                                min_width=120,
+                                elem_classes=["xwave-mini-dd"],
+                            )
+                        with gr.Row(elem_classes=["xwave-action-row"]):
                             mute_prompt_btn = gr.Button(
-                                "Mute prompt", size="sm", scale=1, min_width=92
+                                "Mute", size="sm", scale=1, min_width=56
                             )
                             duplicate_btn = gr.Button(
-                                "Duplicate", size="sm", scale=1, min_width=82
+                                "Dup", size="sm", scale=1, min_width=48
                             )
-                        with gr.Row():
-                            reset_xform_btn = gr.Button("Reset pose", size="sm", scale=1, min_width=88)
-                            reisolate_btn = gr.Button("Re-cut", size="sm", scale=1, min_width=72)
-                            delete_btn = gr.Button("Delete", size="sm", variant="stop", scale=1, min_width=72)
-                        insp_opacity = gr.Slider(
-                            0.0, 1.0, value=1.0, step=0.01, label="Opacity",
+                        with gr.Row(elem_classes=["xwave-action-row"]):
+                            reset_xform_btn = gr.Button(
+                                "Reset", size="sm", scale=1, min_width=56
+                            )
+                            reisolate_btn = gr.Button(
+                                "Re-cut", size="sm", scale=1, min_width=56
+                            )
+                            delete_btn = gr.Button(
+                                "Delete",
+                                size="sm",
+                                variant="stop",
+                                scale=1,
+                                min_width=56,
+                            )
+                        cutout_mode = gr.Radio(
+                            choices=["rembg", "SAM2", "none"],
+                            value="rembg",
+                            show_label=False,
+                            container=False,
                             visible=False,
-                        )
-                        insp_feather = gr.Slider(
-                            0.0, 128.0, value=0.0, step=1.0,
-                            label="Edge feather (inward)",
-                            visible=False,
-                        )
-                        insp_blend = gr.Dropdown(
-                            choices=BLEND_MODE_LABELS,
-                            value="Normal",
-                            label="Blend mode",
-                            visible=False,
+                            elem_classes=["xwave-cutout-mode", "xwave-compact-radio"],
                         )
                         raw_view = gr.Image(
                             label="Raw — click the subject to re-cut with SAM2",
                             type="pil",
                             interactive=False,
                             visible=False,
-                            height=170,
+                            height=140,
                             buttons=[],
                             elem_classes=["xwave-raw-view"],
                         )
-                        gr.Markdown('<p class="xwave-section-head">Import image</p>')
-                        import_img = gr.Image(
-                            type="pil",
-                            label="Drop or upload",
-                            height=120,
-                            buttons=[],
-                            elem_classes=["xwave-import"],
-                        )
-                        import_cutout = gr.Radio(
-                            choices=["rembg", "SAM2", "none"],
-                            value="rembg",
-                            label="Cutout",
-                            elem_classes=["xwave-import-cutout"],
-                        )
-                        import_btn = gr.Button("Import into layer", size="sm")
+                        with gr.Accordion("Import image", open=False):
+                            import_img = gr.Image(
+                                type="pil",
+                                label="Drop or upload",
+                                height=100,
+                                buttons=[],
+                                elem_classes=["xwave-import"],
+                            )
+                            import_btn = gr.Button("Import into layer", size="sm")
 
                     # —— Output style ——
                     with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
@@ -890,38 +1055,49 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             container=False,
                             filterable=True,
                         )
-                        concat_dd = gr.Dropdown(
-                            label="Prompt order",
-                            choices=list(CONCAT_ORDERS.keys()),
-                            value="Prefix · Prompts · Suffix",
-                        )
-                        manual_chk = gr.Checkbox(
-                            label="Manual style (own prefix/suffix)", value=False
-                        )
-                        manual_prefix = gr.Textbox(
-                            label="Manual prefix", lines=1, visible=False,
-                            placeholder="e.g. watercolor illustration of",
-                        )
-                        manual_suffix = gr.Textbox(
-                            label="Manual suffix", lines=1, visible=False,
-                            placeholder="e.g. soft pastel palette, paper texture",
-                        )
-                        neg_prompt = gr.Textbox(
-                            label="Negative prompt",
-                            value=session.output_settings.negative_prompt,
-                            lines=2,
-                            max_lines=3,
-                        )
-                        with gr.Row(elem_classes=["xwave-seed-row"]):
+                        with gr.Row(elem_classes=["xwave-seed-row", "xwave-style-seed"]):
                             out_seed = gr.Number(
-                                label="Seed",
                                 value=session.output_settings.seed,
                                 precision=0,
-                                scale=2,
-                                min_width=100,
+                                show_label=False,
+                                container=False,
+                                scale=1,
+                                min_width=88,
+                                elem_classes=["xwave-seed", "xwave-style-seed-num"],
                             )
                             roll_seed_btn = gr.Button(
-                                "Roll seed", size="sm", scale=0, min_width=88
+                                "🎲",
+                                size="sm",
+                                scale=0,
+                                min_width=36,
+                                elem_classes=["xwave-roll-seed"],
+                            )
+                        with gr.Accordion(
+                            "Prompt options",
+                            open=False,
+                            elem_classes=["xwave-style-opts"],
+                        ):
+                            concat_dd = gr.Dropdown(
+                                label="Prompt order",
+                                choices=list(CONCAT_ORDERS.keys()),
+                                value="Prefix · Prompts · Suffix",
+                            )
+                            manual_chk = gr.Checkbox(
+                                label="Manual style (own prefix/suffix)", value=False
+                            )
+                            manual_prefix = gr.Textbox(
+                                label="Manual prefix", lines=1, visible=False,
+                                placeholder="e.g. watercolor illustration of",
+                            )
+                            manual_suffix = gr.Textbox(
+                                label="Manual suffix", lines=1, visible=False,
+                                placeholder="e.g. soft pastel palette, paper texture",
+                            )
+                            neg_prompt = gr.Textbox(
+                                label="Negative prompt",
+                                value=session.output_settings.negative_prompt,
+                                lines=2,
+                                max_lines=3,
                             )
                         # Concatenation result (always available)
                         with gr.Group(elem_classes=["xwave-built-prompt"]):
@@ -1175,6 +1351,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             status,
             insp_prompt,
             iso_backdrop,
+            iso_white_btn,
+            iso_black_btn,
             insp_opacity,
             insp_feather,
             insp_blend,
@@ -1183,7 +1361,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             llm_prompt_view,
             mute_prompt_btn,
             cutout_chk,
+            cutout_mode,
+            obj_scale,
             obj_rotation,
+            obj_flip_x,
+            obj_flip_y,
             bg_scale,
             bg_rotation,
             bg_offset_x,
@@ -1351,33 +1533,67 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 include_layers=False,
             )
 
+        def _iso_swatch_pack(label: str, *, visible: bool):
+            sel = str(label or "White")
+            return (
+                sel,
+                gr.update(
+                    visible=visible,
+                    variant="primary" if sel == "White" else "secondary",
+                ),
+                gr.update(
+                    visible=visible,
+                    variant="primary" if sel == "Black" else "secondary",
+                ),
+            )
+
         def on_cutout(checked):
             session.set_layer_cutout(bool(checked))
             if not session.layer_cutout:
-                return gr.update(visible=False, interactive=False), session.status
+                return (*_iso_swatch_pack("White", visible=False), session.status)
             obj = session.doc.selected()
             label = _iso_backdrop_label(obj.isolation_prompt if obj else ISO_WHITE)
             if obj is not None and not (obj.isolation_prompt or "").strip():
                 session.set_isolation_backdrop(label)
-            return gr.update(value=label, visible=True, interactive=True), session.status
+            return (*_iso_swatch_pack(label, visible=True), session.status)
 
-        def on_iso_backdrop(label):
+        def on_iso_swatch(label):
             if session.doc.selected_id in (None, "__bg__") or not session.layer_cutout:
-                return session.status
+                return (*_iso_swatch_pack(str(label or "White"), visible=False), session.status)
             session.set_isolation_backdrop(str(label or "White"))
-            return session.status
+            return (*_iso_swatch_pack(str(label or "White"), visible=True), session.status)
 
-        def on_obj_rotation(rotation, den, steps, cfg_v, eta_v, llm, neg, oseed):
+        def on_obj_transform(
+            scale, rotation, flip_x, flip_y,
+            den, steps, cfg_v, eta_v, llm, neg, oseed,
+        ):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             obj = session.doc.selected()
             if obj is None:
                 return pack(run_out=False)
-            if rotation is None:
+            if scale is None or rotation is None:
                 return tuple(gr.update() for _ in pack_out)
+            new_scale = max(0.05, float(scale))
             new_rot = float(rotation)
-            if abs(obj.transform.rotation - new_rot) < 1e-6:
+            new_fx = bool(flip_x)
+            new_fy = bool(flip_y)
+            t = obj.transform
+            if (
+                abs(float(t.scale_x) - new_scale) < 1e-6
+                and abs(float(t.scale_y) - new_scale) < 1e-6
+                and abs(float(t.rotation) - new_rot) < 1e-6
+                and bool(getattr(t, "flip_x", False)) == new_fx
+                and bool(getattr(t, "flip_y", False)) == new_fy
+            ):
                 return tuple(gr.update() for _ in pack_out)
-            session.update_transform_by_id(obj.id, rotation=new_rot)
+            session.update_transform_by_id(
+                obj.id,
+                scale_x=new_scale,
+                scale_y=new_scale,
+                rotation=new_rot,
+                flip_x=new_fx,
+                flip_y=new_fy,
+            )
             return pack_work_then_output()
 
         def on_feather(feather, den, steps, cfg_v, eta_v, llm, neg, oseed):
@@ -1440,14 +1656,17 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             )
             return pack_work_then_output()
 
+        def _cutout_prefer(label) -> str:
+            return {"rembg": "rembg", "SAM2": "sam2", "none": "none"}.get(
+                str(label or "rembg"), "rembg"
+            )
+
         def on_import(image, cutout, prompt, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             if image is None:
                 session.status = "Choose an image to import."
                 return pack(run_out=False)
-            mode = {"rembg": "rembg", "SAM2": "sam2", "none": "none"}.get(
-                str(cutout or "rembg"), "rembg"
-            )
+            mode = _cutout_prefer(cutout)
             try:
                 session.import_into_selected(image, cutout=mode, prompt=str(prompt or ""))
             except Exception as exc:  # noqa: BLE001
@@ -1537,13 +1756,20 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             mark_output_dirty()
             return session.status
 
-        def on_reisolate(den, steps, cfg_v, eta_v, llm, neg, oseed):
+        def on_reisolate(cutout, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             obj = session.doc.selected()
             if obj is None or obj.raw_image is None:
                 session.status = "Select an object with a raw image."
                 return pack(run_out=False)
-            session.reisolate_selected(prefer="rembg")
+            mode = _cutout_prefer(cutout)
+            if mode == "none":
+                with session._lock:
+                    obj.image = obj.raw_image.convert("RGBA")
+                    session.status = "Cutout cleared — full raw image."
+                session.refresh_work()
+                return pack_work_then_output()
+            session.reisolate_selected(prefer=mode)
             return pack_work_then_output()
 
         def on_raw_click(evt: gr.SelectData, den, steps, cfg_v, eta_v, llm, neg, oseed):
@@ -1654,7 +1880,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
         def on_size(preset, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
-            w, h = ASPECT_PRESETS.get(preset, (1024, 1024))
+            w, h = ASPECT_PRESETS.get(preset, ASPECT_PRESETS[DEFAULT_ASPECT])
             session.set_canvas_size(w, h)
             session.status = f"Canvas set to {w}×{h}."
             return pack_work_then_output()
@@ -1884,27 +2110,45 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         cutout_chk.change(
             on_cutout,
             inputs=[cutout_chk],
-            outputs=[iso_backdrop, status],
+            outputs=[iso_backdrop, iso_white_btn, iso_black_btn, status],
             show_progress="hidden",
         )
-        iso_backdrop.change(
-            on_iso_backdrop,
-            inputs=[iso_backdrop],
-            outputs=[status],
+        iso_white_btn.click(
+            lambda: on_iso_swatch("White"),
+            outputs=[iso_backdrop, iso_white_btn, iso_black_btn, status],
             show_progress="hidden",
         )
-        obj_rotation.submit(
-            on_obj_rotation,
-            inputs=[obj_rotation, *settings_in],
-            outputs=pack_out,
+        iso_black_btn.click(
+            lambda: on_iso_swatch("Black"),
+            outputs=[iso_backdrop, iso_white_btn, iso_black_btn, status],
             show_progress="hidden",
         )
-        obj_rotation.blur(
-            on_obj_rotation,
-            inputs=[obj_rotation, *settings_in],
-            outputs=pack_out,
-            show_progress="hidden",
-        )
+        for obj_comp in (obj_scale, obj_rotation):
+            obj_comp.submit(
+                on_obj_transform,
+                inputs=[
+                    obj_scale, obj_rotation, obj_flip_x, obj_flip_y, *settings_in,
+                ],
+                outputs=pack_out,
+                show_progress="hidden",
+            )
+            obj_comp.blur(
+                on_obj_transform,
+                inputs=[
+                    obj_scale, obj_rotation, obj_flip_x, obj_flip_y, *settings_in,
+                ],
+                outputs=pack_out,
+                show_progress="hidden",
+            )
+        for obj_flip in (obj_flip_x, obj_flip_y):
+            obj_flip.change(
+                on_obj_transform,
+                inputs=[
+                    obj_scale, obj_rotation, obj_flip_x, obj_flip_y, *settings_in,
+                ],
+                outputs=pack_out,
+                show_progress="hidden",
+            )
         insp_feather.release(
             on_feather,
             inputs=[insp_feather, *settings_in],
@@ -1951,7 +2195,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         )
         import_btn.click(
             on_import,
-            inputs=[import_img, import_cutout, insp_prompt, *settings_in],
+            inputs=[import_img, cutout_mode, insp_prompt, *settings_in],
             outputs=pack_out,
         )
         prompt_lock.input(
@@ -1978,7 +2222,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         llm_prompt_view.blur(
             on_llm_prompt_edit, inputs=[llm_prompt_view], outputs=[status], show_progress="hidden"
         )
-        reisolate_btn.click(on_reisolate, inputs=settings_in, outputs=pack_out)
+        reisolate_btn.click(
+            on_reisolate,
+            inputs=[cutout_mode, *settings_in],
+            outputs=pack_out,
+        )
         reset_xform_btn.click(
             on_reset_xform, inputs=settings_in, outputs=pack_out, show_progress="hidden"
         )
