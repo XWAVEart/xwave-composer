@@ -1,6 +1,7 @@
 # xwave-composer
 
 Multi-layer AI image composition for local use on a high-VRAM **NVIDIA** GPU.
+Developed and tuned for an **RTX 5090** (~32 GB VRAM).
 
 | Stage | Model | Role |
 |--------|--------|------|
@@ -16,7 +17,7 @@ Hybrid design: compose freely on the WORK canvas, refine with a fast SDXL Hyper 
 
 - Linux
 - Python 3.10 or newer
-- An NVIDIA GPU with enough VRAM for Flux + SDXL Hyper (about 24 GB or more recommended; developed on ~32 GB)
+- An NVIDIA GPU with enough VRAM for Flux + SDXL Hyper (about 24 GB or more recommended; developed on an RTX 5090 with ~32 GB)
 - A CUDA-capable PyTorch build that matches your driver
 
 ## Setup
