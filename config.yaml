@@ -88,7 +88,8 @@ export:
   allow_fallback: false  # fail visibly rather than silently exporting Lanczos
   seedvr2_runtime_dir: "models/seedvr2-runtime"
   seedvr2_weights_dir: "models/seedvr2-runtime/weights"
-  # Final export gets exclusive VRAM, so use the full-quality 7B FP16 model.
+  # Default: full-quality 7B FP16 (exclusive VRAM after Flux/SDXL unload).
+  # Also supported: 7B sharp/FP8 mixed, 3B FP16/FP8 (auto-download on first use).
   seedvr2_model: "seedvr2_ema_7b_fp16.safetensors"
   seedvr2_seed: 42
   seedvr2_color_correction: "lab"
@@ -97,6 +98,14 @@ export:
   seedvr2_attention: "sdpa"
   seedvr2_tile_size: 1024
   seedvr2_timeout_s: 1800
+  # Memory / speed (passed to SeedVR2 CLI). BlockSwap>0 or swap_io forces
+  # dit_offload_device=cpu when left at "none".
+  seedvr2_blocks_to_swap: 0          # 0–32 (3B) / 0–36 (7B)
+  seedvr2_swap_io_components: false
+  seedvr2_dit_offload_device: "none" # none | cpu
+  seedvr2_vae_offload_device: "none"
+  seedvr2_compile_dit: false         # torch.compile; slower first export
+  seedvr2_compile_mode: "default"
   factor: 2
   jpeg_quality: 95
   default_refine_strength: 0.3

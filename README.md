@@ -125,7 +125,10 @@ xwave-composer/
 | `isolation.preferred` | `sam2` or `rembg` (auto-isolation always uses rembg; SAM2 is for click re-cut) |
 | `llm.model_id` | Qwen2.5-VL-3B-Instruct (vision rewrite) |
 | `style.presets_file` | CSV of style presets (default project root) |
-| `export.upscaler` | `seedvr2` default; export-only 7B FP16 runtime |
+| `export.upscaler` | `seedvr2` default; export-only subprocess (7B/3B, FP16/FP8) |
+| `export.seedvr2_model` | DiT weights filename; UI presets cover Quality / Balanced / Low VRAM / Fast |
+| `export.seedvr2_blocks_to_swap` | BlockSwap count (0=off); forces DiT offload to CPU when > 0 |
+| `export.seedvr2_compile_dit` | `torch.compile` for DiT (slower first export) |
 | `server.host` | `0.0.0.0` for LAN access |
 
 SeedVR2 export failures are shown explicitly by default instead of silently substituting a LANCZOS resize. Set `export.allow_fallback: true` only if that fallback is desired.

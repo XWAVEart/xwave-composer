@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PIL import Image
 
@@ -15,6 +15,230 @@ from xwave_composer.config import AppConfig
 from xwave_composer.device import empty_cache, gpu_summary
 
 logger = logging.getLogger(__name__)
+
+# Product model allowlist (subset of upstream SeedVR2 registry).
+SEEDVR2_MODEL_CHOICES: list[tuple[str, str]] = [
+    ("7B FP16 — highest fidelity", "seedvr2_ema_7b_fp16.safetensors"),
+    ("7B Sharp FP16 — enhanced detail", "seedvr2_ema_7b_sharp_fp16.safetensors"),
+    (
+        "7B FP8 mixed — lower VRAM",
+        "seedvr2_ema_7b_fp8_e4m3fn_mixed_block35_fp16.safetensors",
+    ),
+    (
+        "7B Sharp FP8 mixed",
+        "seedvr2_ema_7b_sharp_fp8_e4m3fn_mixed_block35_fp16.safetensors",
+    ),
+    ("3B FP16 — balanced", "seedvr2_ema_3b_fp16.safetensors"),
+    ("3B FP8 — fast / low VRAM", "seedvr2_ema_3b_fp8_e4m3fn.safetensors"),
+]
+
+SEEDVR2_MODEL_VALUES = {value for _, value in SEEDVR2_MODEL_CHOICES}
+DEFAULT_SEEDVR2_MODEL = "seedvr2_ema_7b_fp16.safetensors"
+
+# Named packs for the Gradio preset dropdown. Values map 1:1 into CLI options.
+SEEDVR2_PRESETS: dict[str, dict[str, Any]] = {
+    "quality": {
+        "label": "Quality — 7B FP16",
+        "model": "seedvr2_ema_7b_fp16.safetensors",
+        "blocks_to_swap": 0,
+        "swap_io_components": False,
+        "dit_offload_device": "none",
+        "vae_offload_device": "none",
+        "compile_dit": False,
+    },
+    "balanced": {
+        "label": "Balanced — 7B FP8",
+        "model": "seedvr2_ema_7b_fp8_e4m3fn_mixed_block35_fp16.safetensors",
+        "blocks_to_swap": 0,
+        "swap_io_components": False,
+        "dit_offload_device": "none",
+        "vae_offload_device": "none",
+        "compile_dit": False,
+    },
+    "low_vram": {
+        "label": "Low VRAM — 3B FP8 + BlockSwap",
+        "model": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+        "blocks_to_swap": 16,
+        "swap_io_components": True,
+        "dit_offload_device": "cpu",
+        "vae_offload_device": "cpu",
+        "compile_dit": False,
+    },
+    "fast": {
+        "label": "Fast — 3B FP8 + compile",
+        "model": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+        "blocks_to_swap": 0,
+        "swap_io_components": False,
+        "dit_offload_device": "none",
+        "vae_offload_device": "none",
+        "compile_dit": True,
+    },
+}
+
+SEEDVR2_PRESET_CHOICES: list[tuple[str, str]] = [
+    (meta["label"], key) for key, meta in SEEDVR2_PRESETS.items()
+]
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_seedvr2_option(
+    options: dict[str, object] | None,
+    config: AppConfig,
+    key: str,
+    *,
+    default: Any,
+    cast: Callable[[Any], Any] | None = None,
+    config_key: str | None = None,
+) -> Any:
+    """Prefer UI/export options, then ``export.seedvr2_*`` YAML, then default."""
+    cast = cast or (lambda x: x)
+    opts = options or {}
+    if key in opts and opts[key] is not None:
+        return cast(opts[key])
+    cfg_key = config_key or f"seedvr2_{key}"
+    raw = config.get("export", cfg_key, default=default)
+    if raw is None:
+        raw = default
+    return cast(raw)
+
+
+def build_seedvr2_command(
+    *,
+    cli: Path,
+    input_path: Path,
+    output_path: Path,
+    model_dir: Path,
+    target_short: int,
+    target_long: int,
+    config: AppConfig,
+    options: dict[str, object] | None = None,
+) -> list[str]:
+    """Build the SeedVR2 ``inference_cli.py`` argv (no subprocess)."""
+    model = str(
+        resolve_seedvr2_option(
+            options, config, "model", default=DEFAULT_SEEDVR2_MODEL
+        )
+    )
+    if model not in SEEDVR2_MODEL_VALUES:
+        logger.warning(
+            "SeedVR2 model %s is outside the product allowlist; passing through.",
+            model,
+        )
+
+    seed = int(resolve_seedvr2_option(options, config, "seed", default=42, cast=int))
+    color = str(
+        resolve_seedvr2_option(
+            options, config, "color_correction", default="lab"
+        )
+    )
+    input_noise = float(
+        resolve_seedvr2_option(
+            options, config, "input_noise_scale", default=0.0, cast=float
+        )
+    )
+    latent_noise = float(
+        resolve_seedvr2_option(
+            options, config, "latent_noise_scale", default=0.0, cast=float
+        )
+    )
+    attention = str(
+        resolve_seedvr2_option(
+            options, config, "attention", default="sdpa"
+        )
+    )
+    tile = int(
+        resolve_seedvr2_option(
+            options, config, "tile_size", default=1024, cast=int
+        )
+    )
+    blocks = int(
+        resolve_seedvr2_option(
+            options, config, "blocks_to_swap", default=0, cast=int
+        )
+    )
+    swap_io = _as_bool(
+        resolve_seedvr2_option(
+            options, config, "swap_io_components", default=False, cast=_as_bool
+        )
+    )
+    dit_offload = str(
+        resolve_seedvr2_option(
+            options, config, "dit_offload_device", default="none"
+        )
+    ).strip().lower()
+    vae_offload = str(
+        resolve_seedvr2_option(
+            options, config, "vae_offload_device", default="none"
+        )
+    ).strip().lower()
+    compile_dit = _as_bool(
+        resolve_seedvr2_option(
+            options, config, "compile_dit", default=False, cast=_as_bool
+        )
+    )
+    compile_mode = str(
+        resolve_seedvr2_option(
+            options, config, "compile_mode", default="default"
+        )
+    )
+
+    # BlockSwap / I/O swap require an offload device in upstream CLI.
+    if (blocks > 0 or swap_io) and dit_offload in ("", "none", "null"):
+        dit_offload = "cpu"
+
+    command = [
+        sys.executable,
+        str(cli),
+        str(input_path),
+        "--output",
+        str(output_path),
+        "--output_format",
+        "png",
+        "--model_dir",
+        str(model_dir),
+        "--dit_model",
+        model,
+        "--resolution",
+        str(int(target_short)),
+        "--max_resolution",
+        str(int(target_long)),
+        "--batch_size",
+        "1",
+        "--seed",
+        str(seed),
+        "--color_correction",
+        color,
+        "--input_noise_scale",
+        str(input_noise),
+        "--latent_noise_scale",
+        str(latent_noise),
+        "--attention_mode",
+        attention,
+        "--dit_offload_device",
+        dit_offload,
+        "--vae_offload_device",
+        vae_offload,
+        "--blocks_to_swap",
+        str(max(0, blocks)),
+        "--vae_encode_tiled",
+        "--vae_decode_tiled",
+        "--vae_encode_tile_size",
+        str(tile),
+        "--vae_decode_tile_size",
+        str(tile),
+    ]
+    if swap_io:
+        command.append("--swap_io_components")
+    if compile_dit:
+        command.extend(["--compile_dit", "--compile_mode", compile_mode])
+    return command
 
 
 class ImageUpscaler:
@@ -78,7 +302,7 @@ class ImageUpscaler:
         model = self.config.get(
             "export",
             "seedvr2_model",
-            default="seedvr2_ema_7b_fp16.safetensors",
+            default=DEFAULT_SEEDVR2_MODEL,
         )
         return f"SeedVR2 export runtime ready ({model}); model loads only during export."
 
@@ -144,20 +368,9 @@ class ImageUpscaler:
         options: dict[str, object] | None = None,
     ) -> Image.Image:
         del steps  # SeedVR2 is a distilled one-step restoration model.
-        options = options or {}
         cli = Path(self._pipe)
         runtime = cli.parent
         factor = int(self.config.get("export", "factor", default=2))
-        model = str(
-            options.get(
-                "model",
-                self.config.get(
-                "export",
-                "seedvr2_model",
-                default="seedvr2_ema_7b_fp16.safetensors",
-                ),
-            )
-        )
         model_dir = self.config.path(
             "export",
             "seedvr2_weights_dir",
@@ -171,41 +384,16 @@ class ImageUpscaler:
             input_path = Path(tmp) / "input.png"
             output_path = Path(tmp) / "output.png"
             image.save(input_path, format="PNG")
-            command = [
-                sys.executable,
-                str(cli),
-                str(input_path),
-                "--output",
-                str(output_path),
-                "--output_format",
-                "png",
-                "--model_dir",
-                str(model_dir),
-                "--dit_model",
-                model,
-                "--resolution",
-                str(target_short),
-                "--max_resolution",
-                str(target_long),
-                "--batch_size",
-                "1",
-                "--seed",
-                str(int(options.get("seed", 42))),
-                "--color_correction",
-                str(options.get("color_correction", "lab")),
-                "--input_noise_scale",
-                str(float(options.get("input_noise_scale", 0.0))),
-                "--latent_noise_scale",
-                str(float(options.get("latent_noise_scale", 0.0))),
-                "--attention_mode",
-                str(self.config.get("export", "seedvr2_attention", default="sdpa")),
-                "--vae_encode_tiled",
-                "--vae_decode_tiled",
-                "--vae_encode_tile_size",
-                str(self.config.get("export", "seedvr2_tile_size", default=1024)),
-                "--vae_decode_tile_size",
-                str(self.config.get("export", "seedvr2_tile_size", default=1024)),
-            ]
+            command = build_seedvr2_command(
+                cli=cli,
+                input_path=input_path,
+                output_path=output_path,
+                model_dir=model_dir,
+                target_short=target_short,
+                target_long=target_long,
+                config=self.config,
+                options=options,
+            )
             logger.info("Starting export-only SeedVR2 process: %s", " ".join(command))
             result = subprocess.run(
                 command,

@@ -32,6 +32,12 @@ from xwave_composer.optimization import (
     profile_label,
 )
 from xwave_composer.pipeline.session import ComposerSession
+from xwave_composer.models.upscaler import (
+    DEFAULT_SEEDVR2_MODEL,
+    SEEDVR2_MODEL_CHOICES,
+    SEEDVR2_PRESET_CHOICES,
+    SEEDVR2_PRESETS,
+)
 from xwave_composer.canvas.compositor import (
     BLEND_MODE_LABELS,
     BLEND_TO_CANVAS,
@@ -1023,22 +1029,18 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                                 "Refine OUTPUT", variant="secondary", size="sm",
                             )
                         with gr.Accordion("SeedVR2 export settings", open=False):
+                            seedvr_preset = gr.Dropdown(
+                                label="Preset",
+                                choices=SEEDVR2_PRESET_CHOICES,
+                                value="quality",
+                            )
                             seedvr_model = gr.Dropdown(
                                 label="Model",
-                                choices=[
-                                    (
-                                        "7B FP16 — highest fidelity",
-                                        "seedvr2_ema_7b_fp16.safetensors",
-                                    ),
-                                    (
-                                        "7B Sharp FP16 — enhanced detail",
-                                        "seedvr2_ema_7b_sharp_fp16.safetensors",
-                                    ),
-                                ],
+                                choices=SEEDVR2_MODEL_CHOICES,
                                 value=config.get(
                                     "export",
                                     "seedvr2_model",
-                                    default="seedvr2_ema_7b_fp16.safetensors",
+                                    default=DEFAULT_SEEDVR2_MODEL,
                                 ),
                             )
                             seedvr_color = gr.Dropdown(
@@ -1088,6 +1090,65 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                                 ),
                                 precision=0,
                             )
+                            with gr.Accordion("Advanced — VRAM / speed", open=False):
+                                seedvr_blocks = gr.Slider(
+                                    0,
+                                    36,
+                                    value=int(
+                                        config.get(
+                                            "export",
+                                            "seedvr2_blocks_to_swap",
+                                            default=0,
+                                        )
+                                    ),
+                                    step=1,
+                                    label="BlockSwap (0 = off)",
+                                    info="Offloads DiT blocks to CPU. Auto-sets offload=cpu when > 0.",
+                                )
+                                seedvr_swap_io = gr.Checkbox(
+                                    label="Swap I/O components",
+                                    value=bool(
+                                        config.get(
+                                            "export",
+                                            "seedvr2_swap_io_components",
+                                            default=False,
+                                        )
+                                    ),
+                                )
+                                with gr.Row():
+                                    seedvr_dit_offload = gr.Dropdown(
+                                        label="DiT offload",
+                                        choices=["none", "cpu"],
+                                        value=str(
+                                            config.get(
+                                                "export",
+                                                "seedvr2_dit_offload_device",
+                                                default="none",
+                                            )
+                                        ),
+                                    )
+                                    seedvr_vae_offload = gr.Dropdown(
+                                        label="VAE offload",
+                                        choices=["none", "cpu"],
+                                        value=str(
+                                            config.get(
+                                                "export",
+                                                "seedvr2_vae_offload_device",
+                                                default="none",
+                                            )
+                                        ),
+                                    )
+                                seedvr_compile = gr.Checkbox(
+                                    label="Compile DiT (torch.compile)",
+                                    value=bool(
+                                        config.get(
+                                            "export",
+                                            "seedvr2_compile_dit",
+                                            default=False,
+                                        )
+                                    ),
+                                    info="Faster later exports; first run pays compile cost.",
+                                )
                         export_btn = gr.Button(
                             "Export accepted OUTPUT 2× with SeedVR2",
                             variant="primary",
@@ -1682,7 +1743,29 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 session.status = f"Final refine failed: {exc}"
                 return pack(run_out=False)
 
-        def on_export(model, color, input_noise, latent_noise, seed):
+        def on_seedvr_preset(preset_key):
+            meta = SEEDVR2_PRESETS.get(str(preset_key)) or SEEDVR2_PRESETS["quality"]
+            return (
+                meta["model"],
+                int(meta["blocks_to_swap"]),
+                bool(meta["swap_io_components"]),
+                str(meta["dit_offload_device"]),
+                str(meta["vae_offload_device"]),
+                bool(meta["compile_dit"]),
+            )
+
+        def on_export(
+            model,
+            color,
+            input_noise,
+            latent_noise,
+            seed,
+            blocks,
+            swap_io,
+            dit_offload,
+            vae_offload,
+            compile_dit,
+        ):
             # Cancel any sleeping OUTPUT debounce while SeedVR2 owns the GPU.
             # Keep a sticky pending bit so mid-export edits refine after restore.
             with out_lock:
@@ -1698,6 +1781,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         "input_noise_scale": float(input_noise),
                         "latent_noise_scale": float(latent_noise),
                         "seed": int(seed),
+                        "blocks_to_swap": int(blocks),
+                        "swap_io_components": bool(swap_io),
+                        "dit_offload_device": str(dit_offload),
+                        "vae_offload_device": str(vae_offload),
+                        "compile_dit": bool(compile_dit),
                     }
                 )
                 flush_pending_output()
@@ -1960,6 +2048,19 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             outputs=pack_out,
             show_progress="full",
         )
+        seedvr_preset.change(
+            on_seedvr_preset,
+            inputs=[seedvr_preset],
+            outputs=[
+                seedvr_model,
+                seedvr_blocks,
+                seedvr_swap_io,
+                seedvr_dit_offload,
+                seedvr_vae_offload,
+                seedvr_compile,
+            ],
+            show_progress="hidden",
+        )
         export_btn.click(
             on_export,
             inputs=[
@@ -1968,6 +2069,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 seedvr_input_noise,
                 seedvr_latent_noise,
                 seedvr_seed,
+                seedvr_blocks,
+                seedvr_swap_io,
+                seedvr_dit_offload,
+                seedvr_vae_offload,
+                seedvr_compile,
             ],
             outputs=[export_image, export_path, status],
         )
