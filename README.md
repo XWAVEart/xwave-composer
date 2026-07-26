@@ -65,41 +65,254 @@ python run.py
 Open on this machine: `http://127.0.0.1:7860`  
 Open on the LAN: `http://<this-host-ip>:7860`
 
-## Workflow
+## User guide
 
-1. **Load models** — Flux + SDXL Hyper + SAM2/rembg. Use the top-bar **BF16 / MXFP8 / NVFP4** buttons to switch compute; the VRAM meter sits on that same row.  
-2. **Layers** — the Background layer exists from the start; **+ Layer** adds object layers.
-   Select a layer, type its prompt in the Layer panel, press **▶️** (or Enter).
-   Object layers get scale / rotation / Flip H·V, opacity, feather, and blend; background gets scale / rotation / X·Y / Flip H·V.
-   Layer cards show the prompt directly — no separate titles.
-   Canvas size is chosen as `aspect · pixels` (portrait → **1:1** → landscape); Apply lives in the same control box.  
-3. **Cutout / Re-cut** — with an object selected, choose **rembg / SAM2 / none** under Reset · Re-cut · Delete, then **Re-cut**.
-   Click the subject in the raw preview to re-cut with SAM2. The ✂️ control on the generate row toggles cutout-after-generate; ⬜ / ⬛ pick the isolation backdrop.  
-4. **WORK canvas** — drag to move, corner handles to stretch, orange handle to rotate; drag cards to reorder, × to delete  
-5. **OUTPUT** — CFG / Denoise / Steps / Eta knobs sit in the top-right bar above the OUTPUT canvas.
-   Style panel: preset dropdown, compact seed + **🎲**, folded **Prompt options** (order / manual / negative), optional LLM rewrite.  
-6. **Output model** — pick an SDXL base (SDXL Base, DreamShaper XL, Juggernaut XL v9, epiCRealism XL, RealVisXL V5) or paste any HF repo id / CivitAI `.safetensors` link, then press Load; the Hyper LoRA is re-applied on top  
-7. **Final output** — use **Refine OUTPUT** to review an SDXL pass at the chosen strength/steps; once accepted, export that exact image 2× with SeedVR2. Flux/SDXL unload, SeedVR2 runs once, then exits and saves a high-quality JPEG to `exports/`
-   **Export Style Flipbook** (fold-down) has two modes. **Styles** re-refines the same WORK under many style prompts (CFG/Denoise/Eta unchanged), optionally filtered by family, then stitches an MP4 that always opens on the current OUTPUT — **🔒** same seed vs **🎲** per-style seed. **Seeds** keeps the current OUTPUT style and varies only the seed (**🔒** `seed+1,+2…` vs **🎲** random per frame). Pick count/frames, FPS (24/30/48/60), and frames-per-image hold.
+This guide uses ASD-STE100 Simplified Technical English.
+UI labels are technical names. Keep the exact label when you operate the control.
+Put the pointer on a control to see a short tooltip.
 
-Hover any control (especially emoji buttons) for a short tooltip.
+### 1. Start the application
 
-## Style presets
+1. Open a terminal.
+2. Go to the project directory.
+3. Activate the virtual environment.
+4. Start the application:
 
-Styles live in `XWAVE-COMPOSER-STYLES.csv` (name, family, CFG, denoise, eta, prefix, suffix, negative).
-Families are **Art**, **Render**, **Photo**, **Sculpture**, and **Other** (more can be added later).
-The Style panel filters by family; Export Style Flipbook can include any checked family subgroups in its random pool.
-Loading a preset builds the OUTPUT prompt as `prefix + [background + object prompts] + suffix`,
-fills the negative prompt, and sets the CFG / denoise / eta knobs — all still editable afterwards.
-Old embedding tokens like `<3D>` in the sheet are stripped automatically.
-Object layers stay style-free; style only affects the OUTPUT stage.
+```bash
+source .venv/bin/activate
+python run.py
+# optional: python run.py --preload --profile mxfp8
+```
 
-## LLM rewrite (optional)
+5. Open `http://127.0.0.1:7860` in a browser.
+6. For access on the local network, use `http://<host-ip>:7860`.
 
-Off by default — the OUTPUT prompt is the plain concatenation. Ticking **LLM rewrite**
-loads **Qwen2.5-VL-3B-Instruct** and sends it the concatenated prompt (style prefix/suffix
-included) plus the current WORK canvas image. The model rewrites the prompt for SDXL and
-transfers only the image's composition (framing, camera angle, subject placement).
+### 2. Load models and set compute
+
+1. Press **Load models**.
+2. Wait until the status shows that the models are ready.
+3. The load includes Flux, SDXL Hyper, and the isolation models (rembg / SAM2).
+4. To set the compute profile, press **BF16**, **MXFP8**, or **NVFP4** in the top bar.
+5. Read the VRAM meter on the same row.
+6. Press **Free VRAM** when you must release GPU memory after export or rewrite.
+7. Set the profile also in the **Output model** panel.
+8. Read the **Applied compute** field for the active path.
+
+### 3. Set the canvas size
+
+1. In the **Layers** column, open **Canvas size**.
+2. Select an `aspect · pixels` value.
+3. The list order is portrait, then **1:1**, then landscape.
+4. Press **Apply**.
+
+### 4. Work with layers
+
+The **Background** layer exists when you start.
+Object layers are cutout layers that you add.
+
+1. Press **+ Layer** to add an object layer.
+2. Select a layer card in the **Layers** list.
+3. Selection is only from the list. A click on the WORK canvas does not select a layer.
+4. Each card shows the layer prompt.
+5. Drag a card to change the layer order.
+6. Press **×** on a card to delete that layer.
+7. Press **Reset** in the **Layers** header to clear the full workspace.
+
+### 5. Generate a layer
+
+1. Select a layer.
+2. Type the layer prompt in the **Layer** panel.
+3. Set the generate seed next to **▶️**. Use `-1` for a random seed.
+4. For an object layer, set cutout-after-generate with **✂️** when the control is shown.
+5. Press **⬜** or **⬛** to set the isolation backdrop when those controls are shown.
+6. Press **▶️**, or press Enter in the prompt field.
+7. Flux generates the layer image.
+
+### 6. Cut out and re-cut an object
+
+1. Select an object layer.
+2. Select **rembg**, **SAM2**, or **none** under the layer actions.
+3. Press **Re-cut** to cut the object again with the selected mode.
+4. To re-cut with SAM2 by point, click the subject in the **Raw** preview.
+5. Mode **none** keeps the full image with no cutout.
+
+### 7. Import an image into a layer
+
+1. Select the target layer.
+2. Open **Import image**.
+3. Drop or upload an image.
+4. Set the cutout mode if you need a cutout.
+5. Press **Import into layer**.
+
+### 8. Transform layers
+
+#### Background
+
+1. Select the **Background** layer.
+2. Set **Scale**, **Rot°**, **X**, and **Y**.
+3. Set **Flip H** or **Flip V** if you need a mirror.
+
+#### Object
+
+1. Select an object layer.
+2. Set **Scale** and **Rot°**.
+3. Set **Flip H** or **Flip V** if you need a mirror.
+4. Set **Opacity** (0 to 1).
+5. Set **Feather** to soften the cutout edge inward (0 to 128).
+6. Set **Blend**. The blend modes are:
+   Normal, Multiply, Screen, Overlay, Soft Light, Hard Light,
+   Add, Subtract, Difference, Darken, Lighten.
+
+#### Layer actions
+
+1. Press **Mute** to remove the layer prompt from the OUTPUT prompt build.
+2. Press **Unmute** to include the prompt again.
+3. Press **Dup** to copy the selected object layer.
+4. Press **Reset** in the **Layer** panel to reset the transform of the selected layer.
+5. Press **Delete** to remove the selected layer.
+
+### 9. Use the WORK canvas
+
+The WORK canvas shows the composed layers.
+
+1. Drag a selected object to move it.
+2. Drag a corner handle to stretch it.
+3. Drag the orange handle to rotate it.
+4. Change scale, rotation, and flip also from the **Layer** panel.
+5. The WORK image updates when the composition changes.
+
+### 10. Control live OUTPUT refine
+
+The OUTPUT canvas shows an SDXL Hyper img2img refine of the WORK image.
+
+1. Set **CFG**, **Denoise**, **Steps**, and **Eta** in the top-right bar.
+2. The application can refresh OUTPUT after WORK or parameter changes.
+3. Press **Update OUTPUT now** to run a refine immediately.
+4. Live refine uses the current OUTPUT settings.
+5. Raise **Steps** when you need higher quality.
+
+### 11. Set style for OUTPUT
+
+Style changes the OUTPUT stage only. Object layer prompts stay free of style text.
+
+1. In the **Style** panel, select a family, or select **All families**.
+2. Select a style preset.
+3. The family values are **Art**, **Render**, **Photo**, **Sculpture**, and **Other**.
+4. The preset sets prefix, suffix, negative prompt, CFG, Denoise, and Eta.
+5. Edit those values after the preset loads if you must.
+6. Set the OUTPUT seed. Press **🎲** for a new random seed.
+7. Open **Prompt options** for more controls:
+   1. Set **Prompt order** (prefix, prompts, and suffix order).
+   2. Select **Manual style** to type your own prefix and suffix.
+   3. Edit the **Negative prompt**.
+8. Read **Built prompt** to see the text that SDXL receives.
+9. Select **Edit built prompt (lock auto-build)** to edit that text by hand.
+10. Clear the lock to rebuild the prompt from layers and style.
+
+Style presets are in `XWAVE-COMPOSER-STYLES.csv`
+(name, family, CFG, denoise, eta, prefix, suffix, negative).
+The loader removes old embedding tokens such as `<3D>`.
+
+### 12. Use LLM rewrite (optional)
+
+LLM rewrite is off by default.
+
+1. Select **LLM rewrite**.
+2. The application loads **Qwen2.5-VL-3B-Instruct** when needed.
+3. The model receives the built prompt and the WORK image.
+4. The model rewrites the prompt for SDXL.
+5. The rewrite keeps composition cues from the WORK image.
+6. Read the LLM prompt field.
+7. Select the LLM prompt lock if you must edit that text by hand.
+
+### 13. Change the OUTPUT model and adapters
+
+1. In **Output model**, select an SDXL base:
+   SDXL Base, DreamShaper XL, Juggernaut XL v9, epiCRealism XL, or RealVisXL V5.
+2. Or type a Hugging Face repo id or a CivitAI `.safetensors` link.
+3. Press **Load**.
+4. The Hyper LoRA loads again on the new base.
+5. Open **Style adapters (LoRA / TI)** to load adapters:
+   1. Type a LoRA path or Hugging Face id.
+   2. Set **LoRA scale**.
+   3. Press **Load LoRA**.
+   4. Type a textual inversion path or id.
+   5. Press **Load TI**.
+6. Put local adapter files in `models/loras/` or `models/embeddings/`.
+
+### 14. Refine and accept OUTPUT
+
+1. Set **Refine strength** and **Refine steps** in the Final output area.
+2. These values are separate from the live OUTPUT knobs.
+3. Press **Refine OUTPUT**.
+4. Review the result on the OUTPUT canvas.
+5. Accept the image before you export.
+
+### 15. Export 2× with SeedVR2
+
+1. Open **SeedVR2 export settings** when you must change defaults.
+2. Select a **Preset**:
+   Quality — 7B FP16,
+   Balanced — 7B FP8,
+   Low VRAM — 3B FP8 + BlockSwap,
+   or Fast — 3B FP8 + compile.
+3. Or select a **Model** from the list.
+4. Set **Color fidelity** (`lab`, `wavelet`, `wavelet_adaptive`, or `none`).
+5. Set **Artifact reduction** and **Detail softness** when you must tune the export.
+6. Set **Seed** for a fixed export seed.
+7. Open **Advanced — VRAM / speed** to set BlockSwap, Swap I/O components, DiT offload, VAE offload, and Compile DiT.
+8. Press **Export accepted OUTPUT 2× with SeedVR2**.
+9. Flux and SDXL unload for the export.
+10. SeedVR2 runs once, then stops.
+11. The application writes a high-quality JPEG to `exports/`.
+12. Read the export path and the export preview.
+13. If SeedVR2 fails, the status shows the error.
+14. Set `export.allow_fallback: true` in `config.yaml` only when a LANCZOS fallback is required.
+
+### 16. Export a style flipbook
+
+1. Refine OUTPUT first. Frame 0 is always the current OUTPUT image.
+2. Open **Export Style Flipbook**.
+3. Select mode **Styles** or **Seeds**.
+
+#### Styles mode
+
+1. Select one or more **Families**.
+2. Set **Styles** count. Use `0` for all styles in the selected families.
+3. Set **FPS** to 24, 30, 48, or 60.
+4. Set **Frames per image** (hold length).
+5. Press **🔒** to use the same seed for each style.
+6. Press **🎲** to use a new seed for each style.
+7. Press **Run style flipbook**.
+8. The application re-refines WORK with each selected style.
+9. CFG, Denoise, and Eta stay as set.
+10. Only prefix, suffix, and negative prompt change per style.
+11. The MP4 starts with the current OUTPUT. The other stills are shuffled.
+12. Read the flipbook path and the video preview.
+
+#### Seeds mode
+
+1. Keep the current OUTPUT style and prompt settings.
+2. Set **Frames** to the total still count. The minimum is 2.
+3. Frame 0 is the current OUTPUT. The other frames use new seeds.
+4. Set **FPS** and **Frames per image**.
+5. Press **🔒** to use `seed+1`, `seed+2`, and so on.
+6. Press **🎲** to use a random seed for each new frame.
+7. Press **Run seed flipbook**.
+8. The stills stay in generation order.
+
+### 17. Recommended full sequence
+
+1. Load models.
+2. Set canvas size.
+3. Generate the background.
+4. Add object layers. Generate and cut out each object.
+5. Arrange layers on the WORK canvas.
+6. Select a style family and a style preset.
+7. Adjust CFG, Denoise, Steps, and Eta.
+8. Press **Update OUTPUT now** or wait for a live refresh.
+9. Press **Refine OUTPUT** when the result is good.
+10. Export 2× with SeedVR2, or run a flipbook.
 
 ## Project layout
 
