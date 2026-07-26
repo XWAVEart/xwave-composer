@@ -95,9 +95,7 @@ Open on the LAN: `http://<host-ip>:7860`
 
 ## User guide
 
-This guide uses ASD-STE100 Simplified Technical English.
-UI labels are technical names. Keep the exact label when you operate the control.
-Put the pointer on a control to see a short tooltip.
+UI labels match the controls in the app. Put the pointer on a control to see a short tooltip.
 
 ### 1. Start the application
 
