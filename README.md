@@ -80,12 +80,15 @@ Open on the LAN: `http://<this-host-ip>:7860`
    Style panel: preset dropdown, compact seed + **🎲**, folded **Prompt options** (order / manual / negative), optional LLM rewrite.  
 6. **Output model** — pick an SDXL base (SDXL Base, DreamShaper XL, Juggernaut XL v9, epiCRealism XL, RealVisXL V5) or paste any HF repo id / CivitAI `.safetensors` link, then press Load; the Hyper LoRA is re-applied on top  
 7. **Final output** — use **Refine OUTPUT** to review an SDXL pass at the chosen strength/steps; once accepted, export that exact image 2× with SeedVR2. Flux/SDXL unload, SeedVR2 runs once, then exits and saves a high-quality JPEG to `exports/`
+   **Export Style Flipbook** (fold-down) has two modes. **Styles** re-refines the same WORK under many style prompts (CFG/Denoise/Eta unchanged), optionally filtered by family, then stitches an MP4 that always opens on the current OUTPUT — **🔒** same seed vs **🎲** per-style seed. **Seeds** keeps the current OUTPUT style and varies only the seed (**🔒** `seed+1,+2…` vs **🎲** random per frame). Pick count/frames, FPS (24/30/48/60), and frames-per-image hold.
 
 Hover any control (especially emoji buttons) for a short tooltip.
 
 ## Style presets
 
-Styles live in `XWAVE-COMPOSER-STYLES.csv` (name, CFG, denoise, eta, prefix, suffix, negative).
+Styles live in `XWAVE-COMPOSER-STYLES.csv` (name, family, CFG, denoise, eta, prefix, suffix, negative).
+Families are **Art**, **Render**, **Photo**, **Sculpture**, and **Other** (more can be added later).
+The Style panel filters by family; Export Style Flipbook can include any checked family subgroups in its random pool.
 Loading a preset builds the OUTPUT prompt as `prefix + [background + object prompts] + suffix`,
 fills the negative prompt, and sets the CFG / denoise / eta knobs — all still editable afterwards.
 Old embedding tokens like `<3D>` in the sheet are stripped automatically.
@@ -103,7 +106,7 @@ transfers only the image's composition (framing, camera angle, subject placement
 ```
 xwave-composer/
   config.yaml
-  XWAVE-COMPOSER-STYLES.csv  # style presets (prefix/suffix/negative + CFG/denoise/eta)
+  XWAVE-COMPOSER-STYLES.csv  # style presets (family + prefix/suffix/negative + CFG/denoise/eta)
   run.py
   requirements.txt
   pyproject.toml

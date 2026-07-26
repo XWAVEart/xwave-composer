@@ -16,6 +16,9 @@
     [".xwave-add-btn", "Add a new object layer"],
     [".xwave-cutout-chk", "Cut out the subject after generate"],
     [".xwave-del", "Delete this layer"],
+    [".xwave-flipbook-lock", "Flipbook: lock seed across all styles"],
+    [".xwave-flipbook-dice", "Flipbook: new random seed per style"],
+    [".xwave-flipbook-run", "Render OUTPUT under many styles and stitch a randomized MP4"],
   ];
 
   const BY_TEXT = {
@@ -44,7 +47,10 @@
     "Refine OUTPUT": "Refine OUTPUT with current strength/steps",
     "Export accepted OUTPUT 2× with SeedVR2":
       "Upscale the accepted OUTPUT 2× with SeedVR2",
+    "Run style flipbook":
+      "Render OUTPUT under many styles and stitch a randomized MP4",
     "Roll seed": "Roll a random seed",
+    "🔒": "Flipbook: lock seed across styles",
   };
 
   function normalize(text) {

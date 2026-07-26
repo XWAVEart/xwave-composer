@@ -1,8 +1,8 @@
 """Style presets loaded from the XWAVE-COMPOSER-STYLES.csv spreadsheet.
 
-Each preset carries a prefix/suffix prompt pair, a negative prompt, and
-sampler values (CFG, denoise, eta). The user prompt is injected between
-prefix and suffix. Values remain user-editable after a preset loads.
+Each preset carries a family tag, a prefix/suffix prompt pair, a negative
+prompt, and sampler values (CFG, denoise, eta). The user prompt is injected
+between prefix and suffix. Values remain user-editable after a preset loads.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 from xwave_composer.config import AppConfig
 
@@ -20,6 +20,10 @@ if TYPE_CHECKING:
     from xwave_composer.canvas.layers import WorkDocument
 
 logger = logging.getLogger(__name__)
+
+# Canonical family labels (order used in UI). New families can be added later.
+STYLE_FAMILIES: tuple[str, ...] = ("Art", "Render", "Photo", "Sculpture", "Other")
+_FAMILY_ALIAS = {f.lower(): f for f in STYLE_FAMILIES}
 
 # Old embedding tokens like <3D>, <DEETS> from a previous setup — no matching
 # textual inversions are loaded here, so they would be tokenized as junk text.
@@ -33,9 +37,22 @@ def _clean(text: str) -> str:
     return text.strip(" ,")
 
 
+def normalize_family(value: str | None) -> str:
+    """Map a CSV family cell to a canonical label; unknown/empty → Other."""
+    raw = (value or "").strip()
+    if not raw:
+        return "Other"
+    known = _FAMILY_ALIAS.get(raw.lower())
+    if known:
+        return known
+    # Allow future families without code edits — Title Case the token.
+    return raw[:1].upper() + raw[1:] if raw else "Other"
+
+
 @dataclass(frozen=True)
 class StylePreset:
     name: str
+    family: str
     cfg: float
     denoise: float
     eta: float
@@ -84,19 +101,53 @@ class StyleManager:
         if header_i is None:
             logger.warning("Style CSV header row not found in %s", self.path)
             return
+        header = [c.strip().lower() for c in rows[header_i]]
+
+        def col(*aliases: str, default: int | None = None) -> int | None:
+            for a in aliases:
+                if a in header:
+                    return header.index(a)
+            return default
+
+        i_name = col("style name", default=0)
+        i_family = col("family")
+        # Support both old (no Family) and new layouts.
+        if i_family is None:
+            i_cfg, i_denoise, i_eta = col("cfg", default=1), col("denoise", default=2), col(
+                "eta", default=3
+            )
+            i_prefix, i_suffix, i_neg = col("prefix", default=4), col("suffix", default=5), col(
+                "negative", default=6
+            )
+            min_cols = 7
+        else:
+            i_cfg, i_denoise, i_eta = col("cfg", default=2), col("denoise", default=3), col(
+                "eta", default=4
+            )
+            i_prefix, i_suffix, i_neg = col("prefix", default=5), col("suffix", default=6), col(
+                "negative", default=7
+            )
+            min_cols = 8
+
+        assert i_name is not None
+        assert i_cfg is not None and i_denoise is not None and i_eta is not None
+        assert i_prefix is not None and i_suffix is not None and i_neg is not None
+
         for row in rows[header_i + 1 :]:
-            if len(row) < 7 or not row[0].strip():
+            if len(row) < min_cols or not row[i_name].strip():
                 continue
-            name = row[0].strip()
+            name = row[i_name].strip()
+            family = normalize_family(row[i_family] if i_family is not None else None)
             try:
                 preset = StylePreset(
                     name=name,
-                    cfg=float(row[1] or 1.0),
-                    denoise=float(row[2] or 0.35),
-                    eta=float(row[3] or 0.0),
-                    prefix=row[4] or "",
-                    suffix=_clean(row[5]),
-                    negative=_clean(row[6]),
+                    family=family,
+                    cfg=float(row[i_cfg] or 1.0),
+                    denoise=float(row[i_denoise] or 0.35),
+                    eta=float(row[i_eta] or 0.0),
+                    prefix=row[i_prefix] or "",
+                    suffix=_clean(row[i_suffix]),
+                    negative=_clean(row[i_neg]),
                 )
             except ValueError as exc:
                 logger.warning("Skipping style row %r: %s", name, exc)
@@ -104,8 +155,40 @@ class StyleManager:
             self.presets[name] = preset
         logger.info("Loaded %d style presets from %s", len(self.presets), self.path)
 
-    def names(self) -> list[str]:
-        return sorted(self.presets.keys(), key=str.lower)
+    def names(self, families: Iterable[str] | None = None) -> list[str]:
+        """Sorted style names, optionally filtered to one or more families."""
+        if families is None:
+            pool = self.presets.values()
+        else:
+            allowed = {normalize_family(f) for f in families if f}
+            if not allowed:
+                return []
+            pool = (p for p in self.presets.values() if p.family in allowed)
+        return sorted((p.name for p in pool), key=str.lower)
+
+    def families_present(self) -> list[str]:
+        """Families that have at least one preset, canonical order then extras."""
+        present = {p.family for p in self.presets.values()}
+        ordered = [f for f in STYLE_FAMILIES if f in present]
+        extras = sorted(present - set(STYLE_FAMILIES), key=str.lower)
+        return ordered + extras
+
+    def names_by_family(self) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {f: [] for f in self.families_present()}
+        for name in self.names():
+            fam = self.presets[name].family
+            out.setdefault(fam, []).append(name)
+        return out
+
+    def grouped_choices(self, include_none: str | None = None) -> list:
+        """Gradio Dropdown choices: family optgroups, optional none sentinel first."""
+        groups: list = []
+        if include_none is not None:
+            groups.append(include_none)
+        for fam, names in self.names_by_family().items():
+            if names:
+                groups.append((fam, names))
+        return groups
 
     def get(self, name: str | None) -> StylePreset | None:
         if not name:

@@ -32,6 +32,7 @@ from xwave_composer.optimization import (
     profile_label,
 )
 from xwave_composer.pipeline.session import ComposerSession
+from xwave_composer.style.style_manager import STYLE_FAMILIES
 from xwave_composer.models.upscaler import (
     DEFAULT_SEEDVR2_MODEL,
     SEEDVR2_MODEL_CHOICES,
@@ -95,6 +96,7 @@ ASPECT_PRESETS = {
 DEFAULT_ASPECT = "1:1 · 1024×1024"
 
 NO_STYLE = "— none —"
+FAMILY_ALL = "All families"
 
 CONCAT_ORDERS = {
     "Prefix · Prompts · Suffix": "pcs",
@@ -431,7 +433,13 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
     head_js = "<script>\n" + "\n".join(js_parts) + "\n</script>" if js_parts else ""
     theme = _build_theme()
 
+    style_family_choices = [FAMILY_ALL] + (
+        session.styles.families_present() if session.styles else list(STYLE_FAMILIES)
+    )
     style_names = [NO_STYLE] + (session.styles.names() if session.styles else [])
+    flipbook_family_choices = (
+        session.styles.families_present() if session.styles else list(STYLE_FAMILIES)
+    )
     base_names = list(BASE_MODEL_PRESETS.keys())
 
     # Debounced OUTPUT refresh driven by canvas transforms
@@ -1048,12 +1056,23 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                     # —— Output style ——
                     with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
                         gr.Markdown('<p class="xwave-section-head">Style</p>')
+                        style_family_dd = gr.Dropdown(
+                            choices=style_family_choices,
+                            value=FAMILY_ALL,
+                            label="Family",
+                            show_label=False,
+                            container=False,
+                            filterable=False,
+                            elem_classes=["xwave-style-family"],
+                        )
                         style_dd = gr.Dropdown(
                             choices=style_names,
                             value=NO_STYLE,
+                            label="Style",
                             show_label=False,
                             container=False,
                             filterable=True,
+                            elem_classes=["xwave-style-name"],
                         )
                         with gr.Row(elem_classes=["xwave-seed-row", "xwave-style-seed"]):
                             out_seed = gr.Number(
@@ -1342,6 +1361,83 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                             height=140,
                             buttons=["download"],
                         )
+                        with gr.Accordion(
+                            "Export Style Flipbook",
+                            open=False,
+                            elem_classes=["xwave-flipbook"],
+                        ):
+                            style_preset_count = (
+                                len(session.styles.names()) if session.styles else 0
+                            )
+                            flipbook_mode = gr.Radio(
+                                choices=["Styles", "Seeds"],
+                                value="Styles",
+                                label="Mode",
+                                elem_classes=["xwave-flipbook-mode"],
+                            )
+                            flipbook_families = gr.CheckboxGroup(
+                                choices=flipbook_family_choices,
+                                value=list(flipbook_family_choices),
+                                label="Families",
+                                elem_classes=["xwave-flipbook-families"],
+                            )
+                            flipbook_count = gr.Number(
+                                label="Styles (0 = all in checked families)",
+                                value=min(32, style_preset_count) if style_preset_count else 32,
+                                precision=0,
+                                minimum=0,
+                                maximum=max(style_preset_count, 1),
+                            )
+                            flipbook_fps = gr.Radio(
+                                choices=[24, 30, 48, 60],
+                                value=30,
+                                label="FPS",
+                            )
+                            flipbook_hold = gr.Number(
+                                label="Frames per image",
+                                value=8,
+                                precision=0,
+                                minimum=1,
+                                maximum=120,
+                            )
+                            flipbook_seed_mode = gr.State(value="lock")
+                            with gr.Row(elem_classes=["xwave-flipbook-seed"]):
+                                flipbook_lock_btn = gr.Button(
+                                    "🔒",
+                                    size="sm",
+                                    scale=0,
+                                    min_width=36,
+                                    variant="primary",
+                                    elem_classes=["xwave-flipbook-lock"],
+                                )
+                                flipbook_dice_btn = gr.Button(
+                                    "🎲",
+                                    size="sm",
+                                    scale=0,
+                                    min_width=36,
+                                    variant="secondary",
+                                    elem_classes=["xwave-flipbook-dice"],
+                                )
+                                flipbook_seed_hint = gr.Markdown(
+                                    '<p class="xwave-flipbook-seed-hint">'
+                                    "🔒 same seed · 🎲 new seed per style</p>"
+                                )
+                            flipbook_btn = gr.Button(
+                                "Run style flipbook",
+                                variant="primary",
+                                size="sm",
+                                elem_classes=["xwave-flipbook-run"],
+                            )
+                            flipbook_path = gr.Textbox(
+                                label="Flipbook path",
+                                interactive=False,
+                                lines=1,
+                            )
+                            flipbook_video = gr.Video(
+                                label="Flipbook preview",
+                                interactive=False,
+                                height=160,
+                            )
 
         # ── Callbacks ───────────────────────────────────────────
         pack_out = [
@@ -1828,6 +1924,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 bool(s.use_llm_rewrite),
                 s.negative_prompt,
                 s.seed,
+                FAMILY_ALL,
                 NO_STYLE,
                 False,
                 gr.update(value="", interactive=False),
@@ -1866,6 +1963,28 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 if obj is not None:
                     obj.prompt = str(prompt or "")
             return render_layers_html(session)
+
+        def _style_choices_for_family(fam: str | None) -> list[str]:
+            if not session.styles:
+                return [NO_STYLE]
+            if not fam or fam == FAMILY_ALL:
+                names = session.styles.names()
+            else:
+                names = session.styles.names([fam])
+            return [NO_STYLE] + names
+
+        def on_style_family(fam, current_style):
+            choices = _style_choices_for_family(fam)
+            value = current_style if current_style in choices else NO_STYLE
+            s = session.apply_style_preset(None if value == NO_STYLE else value)
+            return (
+                gr.update(choices=choices, value=value),
+                s.cfg,
+                s.denoise,
+                s.eta,
+                s.negative_prompt,
+                session.status,
+            )
 
         def on_style(name):
             s = session.apply_style_preset(None if name == NO_STYLE else name)
@@ -2075,6 +2194,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 use_llm,
                 neg_prompt,
                 out_seed,
+                style_family_dd,
                 style_dd,
                 prompt_lock,
                 prompt_view,
@@ -2239,6 +2359,14 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             on_opacity_live, inputs=[insp_opacity, *settings_in], outputs=pack_out,
             show_progress="hidden",
         )
+        style_family_dd.change(
+            on_style_family,
+            inputs=[style_family_dd, style_dd],
+            outputs=[style_dd, cfg, denoise, eta, neg_prompt, status],
+            show_progress="hidden",
+        ).then(
+            on_params_now, inputs=settings_in, outputs=pack_out, show_progress="hidden",
+        )
         style_dd.change(
             on_style, inputs=[style_dd], outputs=[cfg, denoise, eta, neg_prompt, status],
             show_progress="hidden",
@@ -2324,6 +2452,112 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 seedvr_compile,
             ],
             outputs=[export_image, export_path, status],
+        )
+
+        def _flipbook_seed_pack(mode: str):
+            sel = "lock" if mode != "random" else "random"
+            return (
+                sel,
+                gr.update(variant="primary" if sel == "lock" else "secondary"),
+                gr.update(variant="primary" if sel == "random" else "secondary"),
+            )
+
+        def on_flipbook_lock():
+            return (*_flipbook_seed_pack("lock"), session.status)
+
+        def on_flipbook_dice():
+            return (*_flipbook_seed_pack("random"), session.status)
+
+        def _flipbook_style_count_update(fams):
+            selected = [f for f in (fams or []) if f]
+            n = len(session.styles.names(selected)) if session.styles and selected else 0
+            return gr.update(
+                label="Styles (0 = all in checked families)",
+                maximum=max(n, 1),
+                value=min(32, n) if n else 0,
+                minimum=0,
+            )
+
+        def on_flipbook_families(fams):
+            return _flipbook_style_count_update(fams)
+
+        def on_flipbook_mode(mode, fams):
+            if str(mode or "").strip().lower().startswith("seed"):
+                return (
+                    gr.update(visible=False),
+                    gr.update(
+                        label="Frames (incl. current OUTPUT)",
+                        minimum=2,
+                        maximum=128,
+                        value=32,
+                    ),
+                    (
+                        '<p class="xwave-flipbook-seed-hint">'
+                        "🔒 seed+1,+2… · 🎲 random seed per frame</p>"
+                    ),
+                    gr.update(value="Run seed flipbook"),
+                )
+            return (
+                gr.update(visible=True),
+                _flipbook_style_count_update(fams),
+                (
+                    '<p class="xwave-flipbook-seed-hint">'
+                    "🔒 same seed · 🎲 new seed per style</p>"
+                ),
+                gr.update(value="Run style flipbook"),
+            )
+
+        def on_flipbook(mode, count, fps, hold, seed_mode, fams):
+            path, msg = session.export_style_flipbook(
+                style_count=int(count or 0),
+                fps=int(fps or 30),
+                frames_per_image=int(hold or 8),
+                lock_seed=(str(seed_mode or "lock") != "random"),
+                families=list(fams or []),
+                mode=str(mode or "styles"),
+            )
+            video = str(path) if path is not None else None
+            out_path = str(path) if path is not None else ""
+            return video, out_path, msg
+
+        flipbook_mode.change(
+            on_flipbook_mode,
+            inputs=[flipbook_mode, flipbook_families],
+            outputs=[
+                flipbook_families,
+                flipbook_count,
+                flipbook_seed_hint,
+                flipbook_btn,
+            ],
+            show_progress="hidden",
+        )
+        flipbook_families.change(
+            on_flipbook_families,
+            inputs=[flipbook_families],
+            outputs=[flipbook_count],
+            show_progress="hidden",
+        )
+        flipbook_lock_btn.click(
+            on_flipbook_lock,
+            outputs=[flipbook_seed_mode, flipbook_lock_btn, flipbook_dice_btn, status],
+            show_progress="hidden",
+        )
+        flipbook_dice_btn.click(
+            on_flipbook_dice,
+            outputs=[flipbook_seed_mode, flipbook_lock_btn, flipbook_dice_btn, status],
+            show_progress="hidden",
+        )
+        flipbook_btn.click(
+            on_flipbook,
+            inputs=[
+                flipbook_mode,
+                flipbook_count,
+                flipbook_fps,
+                flipbook_hold,
+                flipbook_seed_mode,
+                flipbook_families,
+            ],
+            outputs=[flipbook_video, flipbook_path, status],
         )
 
         # 0.75s: less contention with concurrency=1 than 200ms; OUTPUT still

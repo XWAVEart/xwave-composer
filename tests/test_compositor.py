@@ -150,6 +150,7 @@ def test_build_output_prompt_order():
     doc.objects.append(ObjectLayer(prompt="cabin"))
     preset = StylePreset(
         name="Test",
+        family="Art",
         cfg=1.8,
         denoise=0.7,
         eta=0.5,
@@ -191,6 +192,7 @@ def test_build_output_prompt_strips_embedding_tokens():
     doc.background_prompt = "city"
     preset = StylePreset(
         name="Tokens",
+        family="Render",
         cfg=1.8,
         denoise=0.7,
         eta=0.5,

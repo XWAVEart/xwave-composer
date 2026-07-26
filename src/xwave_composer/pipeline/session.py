@@ -88,6 +88,7 @@ class ComposerSession:
     # True when pose fields changed without recomposing last_work (live drag).
     _work_stale: bool = field(default=False, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _flipbook_running: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         self.config.ensure_dirs()
@@ -1250,6 +1251,212 @@ class ComposerSession:
                 f"strength {float(denoise):.2f}). Review it, then export."
             )
             return image
+
+    def export_style_flipbook(
+        self,
+        style_count: int = 32,
+        fps: int = 30,
+        frames_per_image: int = 8,
+        lock_seed: bool = True,
+        families: list[str] | None = None,
+        mode: str = "styles",
+    ) -> tuple[Path | None, str]:
+        """Refine WORK into a flipbook MP4.
+
+        Modes:
+        - ``styles``: vary style prompts (CFG/Denoise/Eta fixed). Frame 0 is
+          the current OUTPUT; remaining stills are shuffled after it.
+          ``lock_seed`` keeps one seed; otherwise each style gets a new seed.
+          ``families`` limits the pool (``None`` = all; empty = error).
+        - ``seeds``: keep the current OUTPUT style/prompt settings; vary only
+          the seed. Frame 0 is the current OUTPUT; remaining stills stay in
+          generation order. ``lock_seed`` increments ``seed+1…``; otherwise
+          each frame gets a random seed. ``style_count`` is total stills
+          (including frame 0); must be ≥ 2.
+        """
+        from datetime import datetime
+
+        from xwave_composer.pipeline.style_flipbook import (
+            assemble_flipbook_stills,
+            flipbook_seeds_for_frames,
+            sample_style_names,
+            styles_to_generate,
+            write_flipbook_mp4,
+        )
+
+        mode_key = str(mode or "styles").strip().lower()
+        if mode_key in ("seed", "seeds"):
+            mode_key = "seeds"
+        else:
+            mode_key = "styles"
+
+        with self._lock:
+            if self._flipbook_running:
+                return None, "Style flipbook already running."
+            if self.last_output is None:
+                return None, "Refine OUTPUT first — flipbook needs a starting frame."
+            if self.last_work is None and self.doc.background is None:
+                return None, "Generate a WORK composition before running a flipbook."
+            if not self.core_ready or self.sdxl is None or not self.sdxl.ready:
+                return None, "SDXL not ready — load models before flipbook export."
+
+            all_names: list[str] = []
+            if mode_key == "styles":
+                if not self.styles or not self.styles.names():
+                    return None, "No style presets loaded."
+                if families is None:
+                    all_names = list(self.styles.names())
+                else:
+                    fam_filter = [f for f in families if f]
+                    if not fam_filter:
+                        return None, "Select at least one style family for the flipbook."
+                    all_names = list(self.styles.names(fam_filter))
+                    if not all_names:
+                        return None, "No styles in the selected families."
+            else:
+                n_stills = int(style_count or 0)
+                if n_stills < 2:
+                    return None, "Seed flipbook needs at least 2 frames (incl. current OUTPUT)."
+
+            self._flipbook_running = True
+            frame0 = self.last_output.copy()
+            work_snap = (
+                self.last_work.copy()
+                if self.last_work is not None
+                else compose_work_image(self.doc)
+            )
+            s = self.output_settings
+            saved = {
+                "active_name": self.styles.active_name if self.styles else None,
+                "seed": int(s.seed),
+                "negative": str(s.negative_prompt or ""),
+                "use_llm": bool(s.use_llm_rewrite),
+                "prompt_locked": bool(s.prompt_locked),
+                "custom_prompt": str(s.custom_prompt or ""),
+                "manual_style": bool(s.manual_style),
+                "manual_prefix": str(s.manual_prefix or ""),
+                "manual_suffix": str(s.manual_suffix or ""),
+                "cfg": float(s.cfg),
+                "denoise": float(s.denoise),
+                "eta": float(s.eta),
+                "steps": int(s.steps),
+            }
+            current_name = self.styles.active_name if self.styles else None
+            if s.seed < 0:
+                s.seed = random.randint(0, 2_147_483_647)
+            locked_seed = int(s.seed)
+            if mode_key == "styles":
+                # Force concat path for style-swap frames.
+                s.use_llm_rewrite = False
+                s.prompt_locked = False
+                s.manual_style = False
+            else:
+                # Keep current style/prompt path; only seeds change.
+                s.use_llm_rewrite = False
+
+        path: Path | None = None
+        msg = "Flipbook cancelled."
+        try:
+            generated: list[Image.Image] = []
+            if mode_key == "styles":
+                selected = sample_style_names(all_names, current_name, int(style_count))
+                to_gen = styles_to_generate(selected, current_name)
+                total = len(to_gen)
+                for i, name in enumerate(to_gen, start=1):
+                    with self._lock:
+                        preset = self.styles.set_active(name) if self.styles else None
+                        if preset is None:
+                            continue
+                        self.output_settings.negative_prompt = preset.negative
+                        self.output_settings.cfg = saved["cfg"]
+                        self.output_settings.denoise = saved["denoise"]
+                        self.output_settings.eta = saved["eta"]
+                        self.output_settings.steps = saved["steps"]
+                        if lock_seed:
+                            self.output_settings.seed = locked_seed
+                        else:
+                            self.output_settings.seed = random.randint(0, 2_147_483_647)
+                        self.status = f"Style flipbook {i}/{total}: {name}…"
+
+                    out = self.run_output(work_snap)
+                    generated.append(out.copy())
+                stills = assemble_flipbook_stills(frame0, generated, shuffle_rest=True)
+                stamp_prefix = "style_flipbook"
+                kind = "Style"
+            else:
+                n_stills = int(style_count)
+                seeds = flipbook_seeds_for_frames(
+                    locked_seed,
+                    n_stills - 1,
+                    increment=bool(lock_seed),
+                )
+                total = len(seeds)
+                style_label = current_name or ("manual" if saved["manual_style"] else "current")
+                for i, seed in enumerate(seeds, start=1):
+                    with self._lock:
+                        self.output_settings.cfg = saved["cfg"]
+                        self.output_settings.denoise = saved["denoise"]
+                        self.output_settings.eta = saved["eta"]
+                        self.output_settings.steps = saved["steps"]
+                        self.output_settings.negative_prompt = saved["negative"]
+                        self.output_settings.manual_style = saved["manual_style"]
+                        self.output_settings.manual_prefix = saved["manual_prefix"]
+                        self.output_settings.manual_suffix = saved["manual_suffix"]
+                        self.output_settings.prompt_locked = saved["prompt_locked"]
+                        self.output_settings.custom_prompt = saved["custom_prompt"]
+                        self.output_settings.seed = int(seed)
+                        self.status = (
+                            f"Seed flipbook {i}/{total}: {style_label} · seed {seed}…"
+                        )
+
+                    out = self.run_output(work_snap)
+                    generated.append(out.copy())
+                stills = assemble_flipbook_stills(frame0, generated, shuffle_rest=False)
+                stamp_prefix = "seed_flipbook"
+                kind = "Seed"
+
+            out_dir = self.config.path("export", "output_dir", default="exports")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = out_dir / f"{stamp_prefix}_{stamp}.mp4"
+            with self._lock:
+                self.status = f"Encoding flipbook ({len(stills)} stills)…"
+            write_flipbook_mp4(
+                stills,
+                path,
+                fps=int(fps),
+                frames_per_image=int(frames_per_image),
+            )
+            msg = (
+                f"{kind} flipbook saved ({len(stills)} stills, "
+                f"{fps} fps, {frames_per_image} frames/image): {path}"
+            )
+            return path, msg
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Flipbook failed")
+            msg = f"Flipbook failed: {exc}"
+            return None, msg
+        finally:
+            with self._lock:
+                if self.styles is not None:
+                    self.styles.set_active(saved["active_name"])
+                s = self.output_settings
+                s.seed = saved["seed"]
+                s.negative_prompt = saved["negative"]
+                s.use_llm_rewrite = saved["use_llm"]
+                s.prompt_locked = saved["prompt_locked"]
+                s.custom_prompt = saved["custom_prompt"]
+                s.manual_style = saved["manual_style"]
+                s.manual_prefix = saved["manual_prefix"]
+                s.manual_suffix = saved["manual_suffix"]
+                s.cfg = saved["cfg"]
+                s.denoise = saved["denoise"]
+                s.eta = saved["eta"]
+                s.steps = saved["steps"]
+                self.last_output = frame0
+                self.output_rev += 1
+                self._flipbook_running = False
+                self.status = msg
 
     def export_final(
         self,
