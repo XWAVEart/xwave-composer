@@ -94,15 +94,22 @@
   }
 
   // ── scene ingest ─────────────────────────────────────────────
+  function layerMediaUrl(layer) {
+    return (layer && (layer.data_url || layer.url)) || null;
+  }
+
   function loadImage(url, prev) {
     if (!url) return null;
     if (prev && prev._url === url) return prev;
     const img = new Image();
     img._url = url;
-    // Data-URLs are local — sync decode so new layers paint with the
-    // scene update instead of after OUTPUT has already refreshed.
-    img.decoding = "sync";
+    // File URLs (/gradio_api/file=…) are async; legacy data: URLs stay sync
+    // so first paint after generate still beats OUTPUT when possible.
+    img.decoding = url.indexOf("data:") === 0 ? "sync" : "async";
     img.onload = draw;
+    img.onerror = function () {
+      console.warn("xwave: failed to load layer media", url);
+    };
     img.src = url;
     return img;
   }
@@ -160,10 +167,12 @@
     });
     state.layers = (data.layers || []).map(function (l) {
       const layer = Object.assign({}, l);
+      const media = layerMediaUrl(layer);
+      layer.data_url = media;
       layer._img =
-        prev[layer.id] && prev[layer.id]._url === layer.data_url
+        prev[layer.id] && prev[layer.id]._url === media
           ? prev[layer.id]
-          : loadImage(layer.data_url, null);
+          : loadImage(media, null);
       const pose = localPose[layer.id];
       if (pose) {
         // Server caught up — drop the hold so inspector edits apply immediately.

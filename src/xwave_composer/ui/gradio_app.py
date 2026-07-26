@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import html as html_lib
-import io
 import json
 import logging
 import tempfile
@@ -109,30 +108,70 @@ def _iso_prompt_for_backdrop(label: str | None) -> str:
 # Scene / render helpers
 # ---------------------------------------------------------------------------
 
-# Cache PNG-encoded data URLs; re-encoding every layer on every UI update is slow.
+# Cache preview media as on-disk PNG/JPEG files served via Gradio's /file=
+# endpoint. Scene HTML stays small (JSON + short URLs) instead of megabyte
+# base64 data-URLs embedded in the DOM.
+# key -> (python id(img), max_side, url)
 _URL_CACHE: dict[str, tuple[int, int, str]] = {}
 
 
-def _encode_data_url(img: Image.Image, max_side: int) -> str:
+def _scene_cache_dir(config: AppConfig) -> Path:
+    d = config.path("paths", "workspace_dir", default="workspace") / "scene_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d.resolve()
+
+
+def _prepare_preview(img: Image.Image, max_side: int) -> Image.Image:
     bands = img.getbands()
     im = img.convert("RGBA") if "A" in bands else img.convert("RGB")
     w, h = im.size
-    scale = min(1.0, max_side / max(w, h))
+    scale = min(1.0, max_side / max(w, h, 1))
     if scale < 1.0:
-        im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.BILINEAR)
-    buf = io.BytesIO()
-    im.save(buf, format="PNG", optimize=True)
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        im = im.resize(
+            (max(1, int(w * scale)), max(1, int(h * scale))),
+            Image.Resampling.BILINEAR,
+        )
+    return im
 
 
-def _data_url(key: str, img: Image.Image | None, max_side: int) -> str | None:
+def _write_scene_file(img: Image.Image, max_side: int, cache_dir: Path) -> Path:
+    """Persist a resized preview; filename is content-hash for reuse."""
+    im = _prepare_preview(img, max_side)
+    digest = hashlib.sha1()
+    digest.update(str(im.size).encode())
+    digest.update(im.mode.encode())
+    digest.update(im.tobytes())
+    # JPEG for opaque RGB previews (bg); PNG when alpha matters (objects).
+    if im.mode == "RGBA":
+        path = cache_dir / f"xwave_scene_{digest.hexdigest()[:20]}.png"
+        if not path.exists():
+            im.save(path, format="PNG", optimize=True)
+    else:
+        path = cache_dir / f"xwave_scene_{digest.hexdigest()[:20]}.jpg"
+        if not path.exists():
+            im.save(path, format="JPEG", quality=88, optimize=True)
+    return path
+
+
+def _gradio_file_url(path: Path) -> str:
+    """Browser URL for a local file Gradio is allowed to serve."""
+    return f"/gradio_api/file={path.resolve()}"
+
+
+def _media_url(
+    key: str,
+    img: Image.Image | None,
+    max_side: int,
+    cache_dir: Path,
+) -> str | None:
     if img is None:
         _URL_CACHE.pop(key, None)
         return None
     cached = _URL_CACHE.get(key)
     if cached and cached[0] == id(img) and cached[1] == max_side:
         return cached[2]
-    url = _encode_data_url(img, max_side)
+    path = _write_scene_file(img, max_side, cache_dir)
+    url = _gradio_file_url(path)
     _URL_CACHE[key] = (id(img), max_side, url)
     return url
 
@@ -159,6 +198,7 @@ def _prune_url_cache(session: ComposerSession) -> None:
 
 def _scene_dict(session: ComposerSession) -> dict[str, Any]:
     _prune_url_cache(session)
+    cache_dir = _scene_cache_dir(session.config)
     layers = []
     for obj in session.doc.objects:
         feather = float(getattr(obj, "feather", 0.0))
@@ -166,6 +206,11 @@ def _scene_dict(session: ComposerSession) -> dict[str, Any]:
         if display is not None and feather > 0.05:
             display = feather_alpha_inward(display, feather)
         blend = normalize_blend_mode(getattr(obj, "blend_mode", "normal"))
+        # Keep key name ``data_url`` for the canvas JS contract; value is now
+        # a Gradio /file= URL (or null), not a base64 data URI.
+        media = _media_url(
+            f"layer:{obj.id}:f{round(feather, 1)}", display, 640, cache_dir
+        )
         layers.append(
             {
                 "id": obj.id,
@@ -181,9 +226,7 @@ def _scene_dict(session: ComposerSession) -> dict[str, Any]:
                 "blend_canvas": BLEND_TO_CANVAS.get(blend, "source-over"),
                 "w": int(obj.image.width) if obj.image else 256,
                 "h": int(obj.image.height) if obj.image else 256,
-                "data_url": _data_url(
-                    f"layer:{obj.id}:f{round(feather, 1)}", display, 640
-                ),
+                "data_url": media,
             }
         )
     return {
@@ -191,7 +234,7 @@ def _scene_dict(session: ComposerSession) -> dict[str, Any]:
         "height": session.doc.height,
         "selected_id": session.doc.selected_id,
         "layers": layers,
-        "bg_data_url": _data_url("bg", session.doc.background, 1024),
+        "bg_data_url": _media_url("bg", session.doc.background, 1024, cache_dir),
         "bg_prompt": session.doc.background_prompt,
         "bg_scale": float(session.doc.bg_scale),
         "bg_rotation": float(session.doc.bg_rotation),
@@ -210,12 +253,17 @@ def render_work_html(scene: dict[str, Any]) -> str:
 
 def render_layers_html(session: ComposerSession) -> str:
     """Layer stack cards. Cards show the layer prompt (no titles)."""
+    cache_dir = _scene_cache_dir(session.config)
     cards: list[str] = []
     for obj in reversed(session.doc.objects):  # top-most first
         sel = " is-selected" if session.doc.selected_id == obj.id else ""
         muted = " is-muted" if not obj.prompt_enabled else ""
-        thumb_url = _data_url(f"thumb:{obj.id}", obj.image, 96) or ""
-        thumb = f' style="background-image:url({thumb_url})"' if thumb_url else ""
+        thumb_url = _media_url(f"thumb:{obj.id}", obj.image, 96, cache_dir) or ""
+        thumb = (
+            f' style="background-image:url(&quot;{html_lib.escape(thumb_url)}&quot;)"'
+            if thumb_url
+            else ""
+        )
         text = (obj.prompt or "").strip() or "empty — type a prompt below"
         empty = "" if (obj.prompt or "").strip() else " is-empty"
         label_text = f"MUTED · {text}" if not obj.prompt_enabled else text
@@ -229,11 +277,15 @@ def render_layers_html(session: ComposerSession) -> str:
             f'aria-label="Delete layer">×</button></div>'
         )
     # Background card always last (bottom of stack)
-    bg_url = _data_url("bg-thumb", session.doc.background, 96) or ""
+    bg_url = _media_url("bg-thumb", session.doc.background, 96, cache_dir) or ""
     bg_sel = " is-selected" if session.doc.selected_id == "__bg__" else ""
     bg_text = (session.doc.background_prompt or "").strip() or "background — type a prompt below"
     bg_empty = "" if (session.doc.background_prompt or "").strip() else " is-empty"
-    bg_thumb = f' style="background-image:url({bg_url})"' if bg_url else ""
+    bg_thumb = (
+        f' style="background-image:url(&quot;{html_lib.escape(bg_url)}&quot;)"'
+        if bg_url
+        else ""
+    )
     cards.append(
         f'<div class="xwave-card xwave-card-bg{bg_sel}{bg_empty}" data-layer-id="__bg__">'
         f'<div class="xwave-thumb"{bg_thumb}></div>'
@@ -1958,6 +2010,17 @@ def _launch_kwargs(demo: gr.Blocks, config: AppConfig) -> dict:
         "share": bool(config.get("server", "share", default=False)),
         "show_error": bool(config.get("server", "show_error", default=True)),
     }
+    # WORK canvas + layer thumbs load previews from these dirs via /gradio_api/file=.
+    workspace = config.path("paths", "workspace_dir", default="workspace").resolve()
+    layers = config.path("paths", "layers_dir", default="workspace/layers").resolve()
+    scene_cache = _scene_cache_dir(config)
+    _OUTPUT_JPEG_DIR.mkdir(parents=True, exist_ok=True)
+    kwargs["allowed_paths"] = [
+        str(workspace),
+        str(layers),
+        str(scene_cache),
+        str(_OUTPUT_JPEG_DIR.resolve()),
+    ]
     theme = getattr(demo, "_xwave_theme", None)
     css = getattr(demo, "_xwave_css", None)
     head = getattr(demo, "_xwave_head", None)
