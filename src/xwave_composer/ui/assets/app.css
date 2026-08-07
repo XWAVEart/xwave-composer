@@ -31,6 +31,16 @@ body,
   padding: 8px 12px 14px !important;
 }
 
+/* Infinite Canvas needs the full viewport width for the largest possible view. */
+.gradio-container:has(#xwave-infinite-canvas-tab:not([style*="display: none"])),
+.gradio-container:has(.xwave-main-tabs > .tab-nav button.selected[id*="infinite"]),
+.gradio-container:has(.xwave-main-tabs > .tab-nav button.selected:nth-child(2)) {
+  max-width: none !important;
+  width: 100% !important;
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+}
+
 .gradio-container footer,
 footer {
   display: none !important;
@@ -636,6 +646,26 @@ footer {
   align-items: flex-start !important;
 }
 
+.xwave-work-grid-bar {
+  gap: 0.4rem !important;
+  margin-top: 0.35rem !important;
+  align-items: end !important;
+}
+
+.xwave-work-grid-bar .label-wrap,
+.xwave-work-grid-bar label {
+  font-size: 0.72rem !important;
+  opacity: 0.85;
+}
+
+.xwave-work-grid-state {
+  display: none !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
 .xwave-canvas-frame {
   background: #0e1013 !important;
   border: 1px solid var(--xw-border) !important;
@@ -1012,6 +1042,19 @@ footer {
   color: var(--xw-muted, #9aa3ad);
 }
 
+.xwave-card.is-hidden {
+  opacity: 0.45;
+}
+
+.xwave-card.is-hidden .xwave-thumb {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
+.xwave-card.is-hidden .xwave-card-text {
+  color: var(--xw-muted, #9aa3ad);
+}
+
 .xwave-card.is-dragging {
   opacity: 0.4;
 }
@@ -1151,4 +1194,346 @@ footer {
 .xwave-app .progress-text,
 .xwave-app .eta-bar {
   color: var(--xw-text-dim) !important;
+}
+
+/* ── main tabs (Compose | Infinite Canvas) ── */
+.xwave-main-tabs {
+  margin-top: 4px !important;
+}
+
+.xwave-main-tabs > .tab-nav {
+  border-bottom: 1px solid var(--xw-border) !important;
+  margin-bottom: 10px !important;
+  gap: 4px !important;
+}
+
+.xwave-main-tabs > .tab-nav button {
+  font-size: 0.8rem !important;
+  font-weight: 600 !important;
+  color: var(--xw-text-dim) !important;
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  padding: 6px 12px !important;
+}
+
+.xwave-main-tabs > .tab-nav button.selected {
+  color: var(--xw-accent) !important;
+  border-bottom-color: var(--xw-accent) !important;
+}
+
+/* ── Infinite Canvas tab ── */
+.xwave-lc-viewport {
+  height: 100% !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.xwave-lc-html {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.xwave-lc-html > .html-container,
+.xwave-lc-html > div {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.xwave-lc-root,
+.xwave-lc-wrap {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--xw-panel);
+  border: 1px solid var(--xw-border);
+  border-radius: var(--xw-radius);
+  overflow: hidden;
+}
+
+.xwave-lc-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* Tab fills remaining viewport under app chrome + Compose/LC tab strip. */
+#xwave-infinite-canvas-tab {
+  /* 130px ≈ brand row + tab nav; keep Generate bar above the fold. */
+  height: calc(100dvh - 140px) !important;
+  max-height: calc(100dvh - 140px) !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+#xwave-infinite-canvas-tab > .gap,
+#xwave-infinite-canvas-tab > div {
+  min-height: 0 !important;
+  max-height: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
+.xwave-lc-top {
+  align-items: stretch !important;
+  flex: 1 1 auto !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  margin-bottom: 0 !important;
+}
+
+/* Outer shell: fill tab height, action bar pinned, body scrolls. */
+.xwave-lc-side {
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  flex-wrap: nowrap !important;
+  gap: 6px !important;
+  padding-right: 2px !important;
+}
+
+.xwave-lc-side-scroll {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-x: hidden !important;
+  overflow-y: scroll !important;
+  overscroll-behavior: contain;
+  padding-right: 6px !important;
+  gap: 6px !important;
+  align-content: flex-start !important;
+}
+
+/* Natural-height children so the scroll body actually overflows. */
+.xwave-lc-side-scroll > * {
+  flex: 0 0 auto !important;
+  flex-shrink: 0 !important;
+  min-height: unset !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.xwave-lc-side-scroll .form,
+.xwave-lc-side-scroll .block {
+  overflow: visible !important;
+  max-height: none !important;
+}
+
+/* Denser LC accordions / controls */
+.xwave-lc-side .gr-accordion,
+.xwave-lc-side .block.gr-accordion {
+  margin: 0 0 4px !important;
+  padding: 0 !important;
+  border: 1px solid var(--xw-border-soft) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  background: var(--xw-panel) !important;
+}
+
+.xwave-lc-side .gr-accordion > .label-wrap,
+.xwave-lc-side .block.gr-accordion > .label-wrap {
+  padding: 6px 8px !important;
+  margin: 0 !important;
+}
+
+.xwave-lc-side .gr-accordion > .label-wrap span,
+.xwave-lc-side .block.gr-accordion > .label-wrap span {
+  font-size: 0.72rem !important;
+  font-weight: 650 !important;
+}
+
+.xwave-lc-side .gr-accordion .wrap,
+.xwave-lc-side .block.gr-accordion .wrap {
+  padding: 4px 8px 8px !important;
+}
+
+.xwave-lc-side .form {
+  gap: 4px !important;
+  margin: 0 !important;
+}
+
+/* Compact single-line control strips (L/R/T/B, Aspect/X/Y/W/H, knobs). */
+.xwave-lc-side .xwave-lc-compact-row,
+.xwave-lc-side .xwave-lc-compact-row > .form {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: flex-end !important;
+  gap: 4px !important;
+  margin: 0 0 4px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.xwave-lc-side .xwave-lc-compact-row .block,
+.xwave-lc-side .xwave-lc-mini.block,
+.xwave-lc-side .xwave-lc-mini-dd.block,
+.xwave-lc-side .xwave-lc-mini-slider.block {
+  flex: 1 1 0 !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+.xwave-lc-side .xwave-lc-mini-dd.block {
+  flex: 1.4 1 0 !important;
+}
+
+.xwave-lc-side .xwave-lc-compact-row button {
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  height: 28px !important;
+  padding: 0 8px !important;
+  font-size: 0.7rem !important;
+}
+
+.xwave-lc-side .xwave-lc-mini .label-wrap,
+.xwave-lc-side .xwave-lc-mini span[data-testid="block-info"],
+.xwave-lc-side .xwave-lc-mini-dd .label-wrap,
+.xwave-lc-side .xwave-lc-mini-dd span[data-testid="block-info"],
+.xwave-lc-side .xwave-lc-mini-slider .label-wrap,
+.xwave-lc-side .xwave-lc-mini-slider span[data-testid="block-info"] {
+  font-size: 0.62rem !important;
+  line-height: 1.1 !important;
+  margin: 0 0 1px !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+}
+
+.xwave-lc-side .xwave-lc-mini .wrap,
+.xwave-lc-side .xwave-lc-mini-dd .wrap,
+.xwave-lc-side .xwave-lc-mini-slider .wrap {
+  gap: 0 !important;
+  min-width: 0 !important;
+}
+
+.xwave-lc-side .xwave-lc-mini input[type="number"] {
+  padding: 2px 4px !important;
+  font-size: 0.7rem !important;
+  font-family: var(--xw-mono) !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  box-sizing: border-box !important;
+}
+
+.xwave-lc-side .xwave-lc-mini input[type="number"]::-webkit-outer-spin-button,
+.xwave-lc-side .xwave-lc-mini input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+
+.xwave-lc-side .xwave-lc-mini input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.xwave-lc-side .xwave-lc-mini button[title*="Reset"],
+.xwave-lc-side .xwave-lc-mini .reset-button,
+.xwave-lc-side .xwave-lc-mini-dd button[title*="Reset"],
+.xwave-lc-side .xwave-lc-mini-dd .reset-button,
+.xwave-lc-side .xwave-lc-mini-slider button[title*="Reset"],
+.xwave-lc-side .xwave-lc-mini-slider .reset-button {
+  display: none !important;
+}
+
+.xwave-lc-side .xwave-lc-mini-dd .wrap-inner,
+.xwave-lc-side .xwave-lc-mini-dd input,
+.xwave-lc-side .xwave-lc-mini-dd .secondary-wrap {
+  min-height: 28px !important;
+  font-size: 0.7rem !important;
+}
+
+.xwave-lc-side .xwave-lc-mini-slider .slider_input_container span,
+.xwave-lc-side .xwave-lc-mini-slider .min_value,
+.xwave-lc-side .xwave-lc-mini-slider .max_value {
+  display: none !important;
+}
+
+.xwave-lc-side .xwave-lc-mini-slider input[type="range"] {
+  min-width: 0 !important;
+  margin: 0 !important;
+}
+
+.xwave-lc-side .xwave-lc-mini-slider input[type="number"] {
+  max-width: 40px !important;
+  min-width: 36px !important;
+  height: 26px !important;
+  font-size: 0.68rem !important;
+  padding: 2px 3px !important;
+}
+
+/* General denser LC form chrome */
+.xwave-lc-side .block {
+  margin-bottom: 4px !important;
+}
+
+.xwave-lc-side label span,
+.xwave-lc-side .label-wrap span {
+  font-size: 0.68rem !important;
+}
+
+.xwave-lc-side input[type="number"],
+.xwave-lc-side input[type="text"],
+.xwave-lc-side .wrap-inner {
+  min-height: 30px !important;
+}
+
+.xwave-lc-side textarea {
+  min-height: 52px !important;
+}
+
+.xwave-lc-side .xwave-status textarea {
+  min-height: 32px !important;
+  max-height: 44px !important;
+}
+
+.xwave-lc-actions {
+  flex: 0 0 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  padding: 8px 4px 2px !important;
+  background: var(--xw-bg) !important;
+  border-top: 1px solid var(--xw-border) !important;
+  z-index: 6 !important;
+}
+
+.xwave-lc-actions .row {
+  margin: 0 !important;
+  gap: 6px !important;
+}
+
+.xwave-text-dim {
+  color: var(--xw-text-dim) !important;
+  font-size: 0.72rem !important;
+  margin: 0 0 4px !important;
+  line-height: 1.3 !important;
 }

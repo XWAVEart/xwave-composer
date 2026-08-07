@@ -143,6 +143,7 @@ Object layers are cutout layers that you add.
 5. Drag a card to change the layer order.
 6. Press **×** on a card to delete that layer.
 7. Press **Reset** in the **Layers** header to clear the full workspace.
+8. Press **Roll all** next to **Reset** / **+ Layer** to re-generate every Flux layer (muted included). Imported layers stay unchanged. Pending SAM is cleared. Duplicates keep their position, rotation, and flips while receiving the origin’s new pixels. OUTPUT seed is re-rolled and refined afterward.
 
 ### 5. Generate a layer
 
@@ -193,9 +194,10 @@ Object layers are cutout layers that you add.
 
 1. Press **Mute** to remove the layer prompt from the OUTPUT prompt build.
 2. Press **Unmute** to include the prompt again.
-3. Press **Dup** to copy the selected object layer.
-4. Press **Reset** in the **Layer** panel to reset the transform of the selected layer.
-5. Press **Delete** to remove the selected layer.
+3. Press **Hide** to remove the layer from WORK and OUTPUT canvases without muting its prompt. Press **Show** to bring it back.
+4. Press **Dup** to copy the selected object layer.
+5. Press **Reset** in the **Layer** panel to reset the transform of the selected layer.
+6. Press **Delete** to remove the selected layer.
 
 ### 9. Use the WORK canvas
 
@@ -206,16 +208,20 @@ The WORK canvas shows the composed layers.
 3. Drag the orange handle to rotate it.
 4. Change scale, rotation, and flip also from the **Layer** panel.
 5. The WORK image updates when the composition changes.
+6. Optional **Grid** overlays help align objects: Off, Center, Thirds, Golden, Quadrants, Diagonals, Safe margins.
+7. Set grid **Color** to Black, White, Cyan, or Magenta.
+8. Grids are a WORK view only. They do not change the composed image or the OUTPUT.
 
 ### 10. Control live OUTPUT refine
 
 The OUTPUT canvas shows an SDXL Hyper img2img refine of the WORK image.
 
-1. Set **CFG**, **Denoise**, **Steps**, and **Eta** in the top-right bar.
-2. The application can refresh OUTPUT after WORK or parameter changes.
-3. Press **Update OUTPUT now** to run a refine immediately.
-4. Live refine uses the current OUTPUT settings.
-5. Raise **Steps** when you need higher quality.
+1. Press **Fast** or **Quality** in the top-right bar to load a denoise/steps pack.
+2. **Quality** (default) uses higher denoise and steps so objects blend into the scene.
+3. **Fast** uses lower denoise and steps for a snappier live refine.
+4. You can still edit **CFG**, **Denoise**, **Steps**, and **Eta** after you select a pack.
+5. On drag release, OUTPUT runs one full refine after a short debounce.
+6. Press **Update OUTPUT now** to run a refine immediately.
 
 ### 11. Set style for OUTPUT
 
@@ -340,6 +346,21 @@ LLM rewrite is off by default.
 9. Press **Refine OUTPUT** when the result is good.
 10. Export 2× with SeedVR2, or run a flipbook.
 
+### 18. Infinite Canvas Mode (region generation)
+
+Infinite Canvas is a separate tab for patchwork region generation over an expandable canvas. It does not use the WORK/OUTPUT layer stack. It shares style presets and the Hyper SDXL pipeline with Compose, but **only one system is active at a time**: switching to Infinite Canvas unloads Flux / isolator / LLM; switching back to Compose re-enables OUTPUT (press **Load models** if Flux was freed).
+
+1. Open the **Infinite Canvas** tab.
+2. Choose the SDXL **base model** and **performance** (BF16 / MXFP8 / NVFP4), then press **Load SDXL**.
+3. Set Width/Height (or pick a preset to fill those fields), then **Create**. Sizes snap to multiples of 64.
+4. Expand the canvas in any direction when you need more room, or **Reset** to clear paint.
+5. Pan with drag / Shift-drag; zoom with the mouse wheel; double-click to fit.
+6. Move the teal region (it may hang off the canvas edge), set aspect ratio, and nudge size (±64).
+7. Enter a prompt for that region, pick a style (local to this tab), tune blend knobs if needed.
+8. Press **Generate region**. SDF strength map + Differential Diffusion on the shared Hyper stack: blank = full rewrite, overlaps fade; a low-res blueprint primes largely empty canvases.
+9. Press **Undo** to revert the last region.
+10. Optionally run **fused refine** (MultiDiffusion-style), then **Export** as PNG / JPEG / WebP (optional 2× SeedVR2).
+
 ## Project layout
 
 ```
@@ -354,10 +375,14 @@ xwave-composer/
     config.py
     canvas/                # layers + compositor
     models/                # Flux, SDXL Hyper, SAM2/rembg, LLM, upscaler
-    pipeline/session.py    # session orchestration
+    pipeline/session.py    # Compose session orchestration
+    pipeline/large_canvas.py  # Infinite Canvas session state
+    pipeline/region_fill.py   # stamp fill + fused refine
+    pipeline/infinite_canvas/ # strength / priming / fuse / photometric
     style/                 # CSV preset loader + prompt build
-    ui/gradio_app.py       # Gradio UI
-    ui/assets/             # app.css, work_canvas.js, tooltips.js
+    ui/gradio_app.py       # Gradio UI (Compose + Infinite Canvas tabs)
+    ui/large_canvas_tab.py # Infinite Canvas tab builder
+    ui/assets/             # app.css, work_canvas.js, large_canvas.js, tooltips.js
   workspace/               # runtime layer images
   exports/                 # 2× exports
   models/                  # local cache / LoRAs / embeddings
@@ -371,6 +396,10 @@ xwave-composer/
 | `optimization.profile` | `bf16`, `mxfp8` (default), or `nvfp4`; also selectable in the UI |
 | `optimization.compile` | Regionally compile repeated diffusion blocks after quantization |
 | `sdxl_hyper.base_model_id` | Startup SDXL base; swappable at runtime from the Output model menu |
+| `sdxl_hyper.default_quality_mode` | `quality` or `fast` — top-bar pack for denoise/steps |
+| `sdxl_hyper.quality_modes.*` | Per-mode `denoise`, `steps`, `preview_steps` (easy to retune) |
+| `sdxl_hyper.preview_scale` | Optional low-res preview scale (unused by the live UI; kept for API/tests) |
+| `sdxl_hyper.settle_debounce_s` | Unused by the live UI (single full refine after debounce) |
 | `isolation.preferred` | `sam2` or `rembg` (default backend; the Layer panel rembg / SAM2 / none selector overrides for Re-cut / import) |
 | `llm.model_id` | Qwen2.5-VL-3B-Instruct (vision rewrite) |
 | `style.presets_file` | CSV of style presets (default project root) |
@@ -399,5 +428,6 @@ SeedVR2 export failures are shown explicitly by default instead of silently subs
 
 ## License
 
-Application code: Apache-2.0.  
+Application code: [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — noncommercial use only. Contact XWAVEart for commercial licensing.
+
 Third-party models keep their own licenses (see requirements doc for commercial notes).

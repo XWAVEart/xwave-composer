@@ -15,6 +15,7 @@ from xwave_composer.optimization import (
     ComputeCapabilities,
     OptimizationReport,
     compile_component,
+    make_nvfp4_linear_inputs_contiguous,
     normalize_profile,
     profile_label,
     quantize_component,
@@ -55,6 +56,79 @@ def test_bf16_quantization_is_a_noop():
     report = quantize_component(module, "bf16", "flux", cfg)
     assert report.applied == "bf16"
     assert report.quantized_layers == 0
+
+
+def test_sdxl_nvfp4_profile_applies_real_nvfp4(monkeypatch):
+    cfg = AppConfig(
+        raw={
+            "optimization": {
+                "min_linear_features": 16,
+                "use_mslk_kernel": True,
+            }
+        },
+        root=AppConfig.load().root,
+    )
+    module = torch.nn.Sequential(
+        torch.nn.Linear(16, 16, dtype=torch.bfloat16),
+        torch.nn.SiLU(),
+    )
+    caps = ComputeCapabilities(True, "GPU", (12, 0), True, True, True)
+    monkeypatch.setattr(ComputeCapabilities, "detect", classmethod(lambda cls: caps))
+    seen: dict[str, object] = {}
+
+    def fake_quantize(target, *, config, filter_fn):
+        seen["config"] = config
+        seen["eligible"] = [
+            name
+            for name, child in target.named_modules()
+            if filter_fn(child, name)
+        ]
+
+    monkeypatch.setattr("torchao.quantization.quantize_", fake_quantize)
+    report = quantize_component(module, "nvfp4", "sdxl", cfg)
+
+    assert report.applied == "nvfp4"
+    assert report.quantized_layers == 1
+    assert type(seen["config"]).__name__ == (
+        "NVFP4DynamicActivationNVFP4WeightConfig"
+    )
+    assert seen["eligible"] == ["0"]
+
+
+def test_nvfp4_linear_inputs_are_made_contiguous():
+    class NVFP4Tensor(torch.nn.Parameter):
+        pass
+
+    linear = torch.nn.Linear(16, 16, dtype=torch.bfloat16)
+    linear.weight = NVFP4Tensor(linear.weight.detach(), requires_grad=False)
+    linear.forward = lambda x: x.is_contiguous()
+    source = torch.zeros((2, 3, 16), dtype=torch.bfloat16).transpose(0, 1)
+    assert not source.is_contiguous()
+
+    assert make_nvfp4_linear_inputs_contiguous(linear) == 1
+    assert make_nvfp4_linear_inputs_contiguous(linear) == 0
+    assert linear(source) is True
+
+
+def test_sdxl_nvfp4_skips_incompatible_regional_compile():
+    class Repeated(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.called = False
+
+        def compile_repeated_blocks(self, **_kwargs):
+            self.called = True
+
+    cfg = AppConfig(
+        raw={"optimization": {"compile": True}},
+        root=AppConfig.load().root,
+    )
+    module = Repeated()
+    report = compile_component(
+        module, OptimizationReport("sdxl", "nvfp4", applied="nvfp4"), cfg
+    )
+    assert not report.compiled
+    assert not module.called
 
 
 def test_regional_compile_hook_is_used(monkeypatch):

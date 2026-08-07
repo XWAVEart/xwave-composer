@@ -34,7 +34,20 @@
     // (or the server catches up) so late scene HTML cannot snap it backward.
     holdTransformsUntil: 0,
     holdLayerId: null,
+    // WORK-only alignment overlays (never sent to OUTPUT / compose).
+    gridType: "off",
+    gridColor: "cyan",
   };
+
+  const GRID_COLORS = {
+    black: "rgba(0, 0, 0, 0.85)",
+    white: "rgba(255, 255, 255, 0.85)",
+    cyan: "rgba(34, 211, 238, 0.85)",
+    magenta: "rgba(232, 121, 249, 0.85)",
+  };
+
+  const GRID_STORAGE_TYPE = "xwave.workGrid.type";
+  const GRID_STORAGE_COLOR = "xwave.workGrid.color";
 
   function $(id) {
     return document.getElementById(id);
@@ -234,6 +247,152 @@
     };
   }
 
+  function normalizeGridType(raw) {
+    const key = String(raw || "off")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+    if (key === "safe" || key === "safe_margin" || key === "safe_margins") {
+      return "safe_margins";
+    }
+    if (
+      key === "off" ||
+      key === "center" ||
+      key === "thirds" ||
+      key === "golden" ||
+      key === "quadrants" ||
+      key === "diagonals" ||
+      key === "safe_margins"
+    ) {
+      return key;
+    }
+    return "off";
+  }
+
+  function normalizeGridColor(raw) {
+    const key = String(raw || "cyan").trim().toLowerCase();
+    return GRID_COLORS[key] ? key : "cyan";
+  }
+
+  function readGridStateFromDom() {
+    const el = $("xwave-grid-state");
+    if (!el) return false;
+    // Initial Gradio HTML is a placeholder (Off/Cyan). Ignore it until the
+    // user changes a control so browser-local prefs survive reload.
+    if (el.getAttribute("data-user") !== "1") return false;
+    const nextType = normalizeGridType(el.getAttribute("data-type"));
+    const nextColor = normalizeGridColor(el.getAttribute("data-color"));
+    let changed = false;
+    if (nextType !== state.gridType) {
+      state.gridType = nextType;
+      changed = true;
+    }
+    if (nextColor !== state.gridColor) {
+      state.gridColor = nextColor;
+      changed = true;
+    }
+    return changed;
+  }
+
+  function loadGridPrefs() {
+    try {
+      if (window.localStorage) {
+        state.gridType = normalizeGridType(
+          localStorage.getItem(GRID_STORAGE_TYPE) || state.gridType
+        );
+        state.gridColor = normalizeGridColor(
+          localStorage.getItem(GRID_STORAGE_COLOR) || state.gridColor
+        );
+      }
+    } catch (_err) {
+      /* ignore private-mode storage failures */
+    }
+  }
+
+  function saveGridPrefs() {
+    try {
+      if (window.localStorage) {
+        localStorage.setItem(GRID_STORAGE_TYPE, state.gridType);
+        localStorage.setItem(GRID_STORAGE_COLOR, state.gridColor);
+      }
+    } catch (_err) {
+      /* ignore */
+    }
+  }
+
+  function strokeV(ctx, x, w, h) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+
+  function strokeH(ctx, y, w, h) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+
+  function drawGuideGrid(ctx) {
+    const type = state.gridType;
+    if (!type || type === "off") return;
+    const w = state.canvasW;
+    const h = state.canvasH;
+    const color = GRID_COLORS[state.gridColor] || GRID_COLORS.cyan;
+    const lw = 1.25 / state.viewScale;
+
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = lw;
+    ctx.setLineDash([]);
+
+    if (type === "center" || type === "quadrants") {
+      strokeV(ctx, w / 2, w, h);
+      strokeH(ctx, h / 2, w, h);
+      if (type === "center") {
+        const r = 5 / state.viewScale;
+        ctx.beginPath();
+        ctx.arc(w / 2, h / 2, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (type === "thirds") {
+      strokeV(ctx, w / 3, w, h);
+      strokeV(ctx, (2 * w) / 3, w, h);
+      strokeH(ctx, h / 3, w, h);
+      strokeH(ctx, (2 * h) / 3, w, h);
+    } else if (type === "golden") {
+      // 1/φ ≈ 0.618… → complementary split ≈ 0.382
+      const a = 1 - 1 / 1.61803398875;
+      const b = 1 / 1.61803398875;
+      strokeV(ctx, w * a, w, h);
+      strokeV(ctx, w * b, w, h);
+      strokeH(ctx, h * a, w, h);
+      strokeH(ctx, h * b, w, h);
+    } else if (type === "diagonals") {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(w, h);
+      ctx.moveTo(w, 0);
+      ctx.lineTo(0, h);
+      ctx.stroke();
+    } else if (type === "safe_margins") {
+      const insets = [0.05, 0.1];
+      insets.forEach(function (frac, i) {
+        const x = w * frac;
+        const y = h * frac;
+        ctx.globalAlpha = i === 0 ? 0.95 : 0.55;
+        ctx.strokeRect(x, y, w - 2 * x, h - 2 * y);
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
+  }
+
   function draw() {
     const canvas = $("xwave-work-canvas");
     if (!canvas) return;
@@ -309,6 +468,9 @@
       ctx.globalCompositeOperation = "source-over";
       ctx.restore();
     }
+
+    // Alignment guides sit above pixels, under transform handles.
+    drawGuideGrid(ctx);
 
     const sel = state.layers.find(function (l) {
       return l.id === state.selectedId;
@@ -537,32 +699,57 @@
 
   // ── boot / DOM watching ──────────────────────────────────────
   function tick() {
+    const gridChanged = readGridStateFromDom();
+    if (gridChanged) saveGridPrefs();
     ingestFromDom(false);
     ensureCanvasBound();
     bindStackDelegation();
+    if (gridChanged) draw();
   }
 
   function watchDom() {
     let scheduled = false;
-    const obs = new MutationObserver(function () {
+    const obs = new MutationObserver(function (mutations) {
       if (scheduled) return;
+      let gridAttr = false;
+      for (let i = 0; i < mutations.length; i++) {
+        const m = mutations[i];
+        if (
+          m.type === "attributes" &&
+          m.target &&
+          m.target.id === "xwave-grid-state"
+        ) {
+          gridAttr = true;
+          break;
+        }
+        if (m.type === "childList") {
+          gridAttr = true;
+          break;
+        }
+      }
       scheduled = true;
       requestAnimationFrame(function () {
         scheduled = false;
         tick();
+        if (gridAttr && readGridStateFromDom()) {
+          saveGridPrefs();
+          draw();
+        }
       });
     });
     obs.observe(document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-scene"],
+      attributeFilter: ["data-scene", "data-type", "data-color"],
     });
     setInterval(tick, 900);
   }
 
   function boot() {
+    loadGridPrefs();
     watchDom();
+    readGridStateFromDom();
     ingestFromDom(true);
     ensureCanvasBound();
     bindStackDelegation();

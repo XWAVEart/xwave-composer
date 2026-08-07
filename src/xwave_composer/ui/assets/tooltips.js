@@ -19,6 +19,10 @@
     [".xwave-flipbook-lock", "Flipbook: lock seed across all styles"],
     [".xwave-flipbook-dice", "Flipbook: new random seed per style"],
     [".xwave-flipbook-run", "Render OUTPUT under many styles and stitch a randomized MP4"],
+    [".xwave-quality-fast", "Fast OUTPUT: lower denoise/steps for snappier live refine"],
+    [".xwave-quality-hq", "Quality OUTPUT: higher denoise/steps so objects blend into the scene"],
+    [".xwave-work-grid-type", "WORK alignment grid (overlay only — not in OUTPUT)"],
+    [".xwave-work-grid-color", "WORK grid line color"],
   ];
 
   const BY_TEXT = {
@@ -28,14 +32,19 @@
     "🎲": "Roll a random seed",
     "✂️": "Cut out the subject after generate",
     "Load models": "Load Flux, SDXL, and SAM2 into VRAM",
-    "Free VRAM": "Unload models and free GPU memory",
+    "Free VRAM": "Unload Flux and optional Compose models (keeps SDXL). Switching to Infinite Canvas does this automatically.",
     BF16: "Full precision (bf16) — highest quality, most VRAM",
     MXFP8: "MXFP8 quantized — balanced quality and VRAM",
     NVFP4: "NVFP4 quantized — lowest VRAM, fastest on Blackwell",
+    Fast: "Fast OUTPUT: lower denoise/steps for snappier live refine",
+    Quality: "Quality OUTPUT: higher denoise/steps so objects blend into the scene",
     "+ Layer": "Add a new object layer",
+    "Roll all": "Re-roll every generated layer (muted too). Imports stay put. Duplicates keep pose; pixels follow the original. Clears pending SAM, then re-rolls OUTPUT.",
     Apply: "Apply selected canvas size",
     Mute: "Mute this layer’s prompt in the final concat",
     Unmute: "Include this layer’s prompt in the final concat",
+    Hide: "Hide this layer on WORK and OUTPUT (prompt still included)",
+    Show: "Show this layer again on WORK and OUTPUT",
     Dup: "Duplicate the selected layer",
     "Re-cut": "Re-run cutout (rembg / SAM2) on this layer",
     Delete: "Delete the selected layer",
@@ -73,8 +82,9 @@
   function applyTip(el) {
     if (!(el instanceof HTMLElement)) return;
     const text = normalize(el.textContent);
-    // Allow Mute/Unmute to refresh when the label flips.
-    if (el.getAttribute("data-xwave-tip") === "1" && el.title && text !== "Mute" && text !== "Unmute") {
+    // Allow Mute/Unmute and Hide/Show to refresh when the label flips.
+    const flipLabels = new Set(["Mute", "Unmute", "Hide", "Show"]);
+    if (el.getAttribute("data-xwave-tip") === "1" && el.title && !flipLabels.has(text)) {
       return;
     }
 

@@ -70,10 +70,15 @@ class ComposerSession:
     last_work: Image.Image | None = None
     last_output: Image.Image | None = None
     last_output_prompt: str = ""
+    # True when last_output came from the fast low-res preview pass.
+    output_is_preview: bool = False
+    quality_mode: str = "quality"
     last_concat_prompt: str = ""
     _rewrite_cache_key: str = ""
     _rewrite_cache_result: str = ""
     _flux_reload_pending: bool = False
+    # Exclusive UI mode: "compose" (Flux+WORK/OUTPUT) or "infinite_canvas" (SDXL stamps).
+    active_system: str = "compose"
     output_rev: int = 0
     status: str = "Ready"
     # Pending object awaiting SAM2 click isolation
@@ -101,11 +106,20 @@ class ComposerSession:
         self.sdxl = SDXLHyperPipeline(self.config)
         self.llm = PromptRewriter(self.config)
         self.upscaler = ImageUpscaler(self.config)
+        from xwave_composer.pipeline.quality_modes import (
+            normalize_quality_mode,
+            quality_mode_pack,
+        )
+
+        self.quality_mode = normalize_quality_mode(
+            self.config.get("sdxl_hyper", "default_quality_mode", default="quality")
+        )
+        pack = quality_mode_pack(self.config, self.quality_mode)
         self.output_settings.denoise = float(
-            self.config.get("sdxl_hyper", "default_denoise", default=0.3)
+            self.config.get("sdxl_hyper", "default_denoise", default=pack["denoise"])
         )
         self.output_settings.steps = int(
-            self.config.get("sdxl_hyper", "default_steps", default=6)
+            self.config.get("sdxl_hyper", "default_steps", default=pack["steps"])
         )
         self.output_settings.cfg = float(
             self.config.get("sdxl_hyper", "guidance_scale", default=1.0)
@@ -115,6 +129,34 @@ class ComposerSession:
         self.output_settings.use_llm_rewrite = bool(
             self.config.get("llm", "enabled_by_default", default=False)
         )
+
+    def apply_quality_mode(self, mode: str) -> OutputSettings:
+        """Apply a Fast/Quality pack to OUTPUT denoise + steps."""
+        from xwave_composer.pipeline.quality_modes import (
+            QUALITY_MODE_LABELS,
+            normalize_quality_mode,
+            quality_mode_pack,
+        )
+
+        key = normalize_quality_mode(mode)
+        pack = quality_mode_pack(self.config, key)
+        with self._lock:
+            self.quality_mode = key
+            self.output_settings.denoise = float(pack["denoise"])
+            self.output_settings.steps = int(pack["steps"])
+            label = QUALITY_MODE_LABELS.get(key, key)
+            self.status = (
+                f"OUTPUT mode: {label} "
+                f"(denoise {self.output_settings.denoise:.2f}, "
+                f"steps {self.output_settings.steps})."
+            )
+            return self.output_settings
+
+    def preview_steps_for_mode(self) -> int:
+        from xwave_composer.pipeline.quality_modes import quality_mode_pack
+
+        pack = quality_mode_pack(self.config, self.quality_mode)
+        return max(1, int(pack["preview_steps"]))
 
     # ------------------------------------------------------------------ models
     def preload_core(self) -> str:
@@ -179,7 +221,8 @@ class ComposerSession:
                 self.sdxl.set_profile(selected, reload=False)
                 self.flux.unload()
                 self.sdxl.unload()
-                self.flux.load()
+                if self.active_system == "compose":
+                    self.flux.load()
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Flux profile switch failed")
                 errors.append(f"Flux: {exc}")
@@ -193,7 +236,11 @@ class ComposerSession:
                 self.status = f"Profile switch partial: {' | '.join(errors)} | {detail}"
             else:
                 self.status = f"Performance profile ready: {profile_label(selected)} | {detail}"
-            if self.last_work is not None and self.sdxl.ready:
+            if (
+                self.active_system == "compose"
+                and self.last_work is not None
+                and self.sdxl.ready
+            ):
                 try:
                     self.run_output(self.last_work)
                 except Exception:  # noqa: BLE001
@@ -241,6 +288,7 @@ class ComposerSession:
         with self._lock:
             self.doc.background = img
             self.doc.background_prompt = prompt
+            self.doc.background_source = "generated"
             self._save_layer_image(img, "background")
             self.last_work = compose_work_image(self.doc)
             self.status = "Background ready."
@@ -309,6 +357,8 @@ class ComposerSession:
             isolation_prompt=isolation_prompt,
             image=rgba,
             raw_image=raw.copy(),
+            source="generated",
+            cutout=True,
         )
         max_dim = max(rgba.width, rgba.height, 1)
         target = min(self.doc.width, self.doc.height) * 0.45
@@ -453,6 +503,7 @@ class ComposerSession:
                     self.doc.background_prompt = prompt.strip()
                 elif not self.doc.background_prompt:
                     self.doc.background_prompt = "imported background"
+                self.doc.background_source = "imported"
                 self._save_layer_image(bg, "background")
                 self.last_work = compose_work_image(self.doc)
                 self.status = "Background imported."
@@ -489,6 +540,9 @@ class ComposerSession:
             first_image = obj.image is None
             obj.image = rgba
             obj.raw_image = raw.copy()
+            obj.source = "imported"
+            obj.cutout = mode != "none"
+            obj.origin_id = None
             if first_image:
                 max_dim = max(rgba.width, rgba.height, 1)
                 target = min(self.doc.width, self.doc.height) * 0.45
@@ -587,6 +641,8 @@ class ComposerSession:
             obj.isolation_prompt = iso
             obj.image = rgba
             obj.raw_image = raw.copy()
+            obj.source = "generated"
+            obj.cutout = bool(isolate)
             if first_image:
                 max_dim = max(rgba.width, rgba.height, 1)
                 target = min(self.doc.width, self.doc.height) * 0.45
@@ -771,6 +827,10 @@ class ComposerSession:
                     source.raw_image.copy() if source.raw_image is not None else None
                 ),
                 transform=LayerTransform.from_dict(source.transform.to_dict()),
+                source=str(source.source or "generated"),
+                cutout=bool(source.cutout),
+                # Point at the ultimate origin so Roll all regenerates once.
+                origin_id=source.origin_id or source.id,
             )
             self.doc.add_object(duplicate)
             duplicate.transform.x = min(
@@ -798,6 +858,19 @@ class ComposerSession:
             state = "included" if obj.prompt_enabled else "muted"
             self.status = f"Layer prompt {state}: {obj.name or obj.id}."
             return obj.prompt_enabled
+
+    def toggle_selected_visibility(self) -> bool | None:
+        """Hide/show the selected object on WORK and OUTPUT (prompt unchanged)."""
+        with self._lock:
+            obj = self.doc.selected()
+            if obj is None:
+                self.status = "Select an object layer to hide or show."
+                return None
+            obj.transform.visible = not bool(obj.transform.visible)
+            self.last_work = compose_work_image(self.doc)
+            state = "shown" if obj.transform.visible else "hidden"
+            self.status = f"Layer {state}: {obj.name or obj.id}."
+            return obj.transform.visible
 
     def reset_workspace(self) -> None:
         """Clear composition state while keeping loaded models ready for use."""
@@ -849,6 +922,146 @@ class ComposerSession:
         self.output_settings.seed = seed
         self.status = f"OUTPUT seed → {seed}"
         return seed
+
+    def roll_all(self) -> Image.Image:
+        """Regenerate every generated layer (muted included); leave imports alone.
+
+        Clears pending SAM state first. For duplicates, re-rolls the origin
+        once, then copies the new pixels onto each duplicate while keeping
+        that duplicate's position, rotation, and x/y flips (and the rest of
+        its transform). Re-rolls the OUTPUT seed and runs a full refine.
+        """
+        with self._lock:
+            self.pending_raw = None
+            self.pending_prompt = ""
+            self.pending_isolation_prompt = ""
+            bg_prompt = (self.doc.background_prompt or "").strip()
+            bg_imported = (
+                str(self.doc.background_source or "").strip().lower() == "imported"
+            )
+            objects = list(self.doc.objects)
+            by_id = {obj.id: obj for obj in objects}
+
+        rolled = 0
+        skipped_import = 0
+
+        if bg_imported:
+            skipped_import += 1
+        elif bg_prompt:
+            self.status = "Roll all — regenerating background…"
+            try:
+                self.generate_background(bg_prompt, seed=-1)
+                rolled += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("roll_all: background failed")
+                self.status = f"Roll all: background failed: {exc}"
+
+        # Group by ultimate origin so each unique image is generated once.
+        groups: dict[str, list[str]] = {}
+        for obj in objects:
+            if obj.is_imported:
+                skipped_import += 1
+                continue
+            if obj.origin_id and obj.origin_id in by_id:
+                origin = by_id[obj.origin_id]
+                if origin.is_imported:
+                    skipped_import += 1
+                    continue
+                root = obj.origin_id
+            elif obj.origin_id:
+                root = f"orphan:{obj.origin_id}"
+            else:
+                root = obj.id
+            if not (obj.prompt or "").strip():
+                # Still allow origin-less empty shells to be skipped; members
+                # with prompts will pull an origin that may lack a prompt.
+                if root == obj.id:
+                    continue
+            groups.setdefault(root, []).append(obj.id)
+
+        # Include origins that only appear via duplicates (no prompt on origin).
+        for root, member_ids in list(groups.items()):
+            if root.startswith("orphan:"):
+                continue
+            if root not in member_ids and root in by_id:
+                member_ids.insert(0, root)
+
+        for root, member_ids in groups.items():
+            with self._lock:
+                members = [
+                    self.doc.find_by_id(mid) for mid in member_ids
+                ]
+                members = [m for m in members if m is not None]
+                if not members:
+                    continue
+                if root.startswith("orphan:"):
+                    primary = members[0]
+                else:
+                    primary = self.doc.find_by_id(root) or members[0]
+                prompt_src = next(
+                    (
+                        m
+                        for m in ([primary] + members)
+                        if (m.prompt or "").strip()
+                    ),
+                    None,
+                )
+                if prompt_src is None:
+                    continue
+                primary_id = primary.id
+                prompt = prompt_src.prompt.strip()
+                iso = (prompt_src.isolation_prompt or primary.isolation_prompt or "")
+                isolate = bool(primary.cutout if primary.image is not None else prompt_src.cutout)
+                self.doc.selected_id = primary_id
+                self.status = (
+                    f"Roll all — regenerating {primary.name or primary_id}…"
+                )
+
+            try:
+                self.generate_selected(
+                    prompt, iso, seed=-1, isolate=isolate
+                )
+                rolled += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("roll_all: layer %s failed", primary_id)
+                self.status = f"Roll all: layer failed: {exc}"
+                continue
+
+            with self._lock:
+                origin = self.doc.find_by_id(primary_id)
+                if origin is None or origin.image is None:
+                    continue
+                for mid in member_ids:
+                    if mid == primary_id:
+                        continue
+                    clone = self.doc.find_by_id(mid)
+                    if clone is None or clone.is_imported:
+                        continue
+                    # Replace pixels only — keep pose (x/y, rotation, flips,
+                    # scale, opacity, visibility) and blend/feather.
+                    clone.image = origin.image.copy()
+                    clone.raw_image = (
+                        origin.raw_image.copy()
+                        if origin.raw_image is not None
+                        else None
+                    )
+                    clone.source = "generated"
+                    clone.cutout = bool(origin.cutout)
+                    clone.path = self._save_layer_image(
+                        clone.image, f"object_{clone.id}"
+                    )
+                self.last_work = compose_work_image(self.doc)
+
+        self.roll_output_seed()
+        out = self.run_output()
+        with self._lock:
+            parts = [f"Roll all done — regenerated {rolled} layer(s)"]
+            if skipped_import:
+                parts.append(f"skipped {skipped_import} import(s)")
+            self.status = ", ".join(parts) + "."
+        return out if out is not None else (
+            self.last_work or compose_work_image(self.doc)
+        )
 
     def update_transform_by_id(
         self,
@@ -1106,6 +1319,10 @@ class ComposerSession:
         """Warm Flux in the background after Qwen releases its VRAM."""
         if not self._flux_reload_pending or not self.flux:
             return
+        if self.active_system != "compose":
+            # Never pull Flux back while Infinite Canvas owns the GPU.
+            self._flux_reload_pending = False
+            return
         if not bool(self.config.get("flux", "keep_loaded", default=True)):
             self._flux_reload_pending = False
             return
@@ -1115,6 +1332,8 @@ class ComposerSession:
 
         def _reload() -> None:
             with self._lock:
+                if self.active_system != "compose":
+                    return
                 if self.flux and not self.flux.ready:
                     try:
                         logger.info("Background-reloading Flux after LLM rewrite")
@@ -1125,12 +1344,21 @@ class ComposerSession:
 
         threading.Thread(target=_reload, daemon=True, name="flux-warm-reload").start()
 
-    def run_output(self, work_image: Image.Image | None = None) -> Image.Image:
+    def run_output(
+        self,
+        work_image: Image.Image | None = None,
+        *,
+        preview: bool = False,
+    ) -> Image.Image:
         """Run SDXL Hyper img2img on the WORK composition.
 
         Snapshot under the session lock; prompt build (incl. LLM) takes the
         lock on its own; SDXL refine runs unlocked so canvas transforms are
         not blocked for the full inference.
+
+        ``preview`` trades resolution and steps for latency so OUTPUT can
+        keep up with dragging. A full-quality pass follows once movement
+        stops. Export / refine / flipbook call ``ensure_full_output`` first.
         """
         with self._lock:
             if work_image is not None:
@@ -1168,22 +1396,40 @@ class ComposerSession:
                 return self.last_output
             if self.output_settings.seed < 0:
                 self.output_settings.seed = random.randint(0, 2_147_483_647)
+            init = work_snap
+            steps = int(self.output_settings.steps)
+            if preview:
+                scale = float(
+                    self.config.get("sdxl_hyper", "preview_scale", default=0.625)
+                )
+                steps = self.preview_steps_for_mode()
+                pw = max(256, (int(work_snap.width * scale) // 8) * 8)
+                ph = max(256, (int(work_snap.height * scale) // 8) * 8)
+                if (pw, ph) != work_snap.size:
+                    init = work_snap.resize((pw, ph), Image.Resampling.BILINEAR)
+                status_msg = "Previewing…"
+            else:
+                status_msg = "Refining OUTPUT with SDXL Hyper…"
             refine_kwargs = {
-                "init_image": work_snap,
+                "init_image": init,
                 "prompt": prompt,
                 "negative_prompt": self.output_settings.negative_prompt,
                 "denoise": self.output_settings.denoise,
-                "steps": self.output_settings.steps,
+                "steps": steps,
                 "seed": int(self.output_settings.seed),
                 "guidance_scale": self.output_settings.cfg,
                 "eta": self.output_settings.eta,
             }
+            target_size = work_snap.size
             sdxl = self.sdxl
-            self.status = "Refining OUTPUT with SDXL Hyper…"
+            self.status = status_msg
 
         assert sdxl is not None
         try:
             out = sdxl.refine(**refine_kwargs)
+            if preview and out.size != target_size:
+                # Back to canvas size so the OUTPUT pane does not jump.
+                out = out.resize(target_size, Image.Resampling.LANCZOS)
         except Exception as exc:  # noqa: BLE001
             logger.exception("OUTPUT refine failed")
             with self._lock:
@@ -1197,16 +1443,26 @@ class ComposerSession:
 
         with self._lock:
             self.last_output = out
+            self.output_is_preview = bool(preview)
             self.output_rev += 1
-            self.status = "OUTPUT updated."
+            self.status = "Preview — settling…" if preview else "OUTPUT updated."
             self._schedule_flux_reload()
             return out
+
+    def ensure_full_output(self) -> Image.Image | None:
+        """Re-render at full quality when the current OUTPUT is only a preview."""
+        with self._lock:
+            needs = self.output_is_preview or self.last_output is None
+        if needs:
+            return self.run_output(preview=False)
+        return self.last_output
 
     # ------------------------------------------------------------------- export
     def refine_final(self, steps: int, denoise: float) -> Image.Image:
         """Refine the current OUTPUT again without replacing the WORK source."""
+        self.ensure_full_output()
         if self.last_output is None:
-            self.run_output()
+            self.run_output(preview=False)
 
         with self._lock:
             source = self.last_output
@@ -1245,6 +1501,7 @@ class ComposerSession:
 
         with self._lock:
             self.last_output = image
+            self.output_is_preview = False
             self.output_rev += 1
             self.status = (
                 f"Refined current OUTPUT ({int(steps)} steps, "
@@ -1318,6 +1575,14 @@ class ComposerSession:
                 if n_stills < 2:
                     return None, "Seed flipbook needs at least 2 frames (incl. current OUTPUT)."
 
+        # Never stitch a low-res interactive preview into a flipbook.
+        self.ensure_full_output()
+
+        with self._lock:
+            if self._flipbook_running:
+                return None, "Style flipbook already running."
+            if self.last_output is None:
+                return None, "Refine OUTPUT first — flipbook needs a starting frame."
             self._flipbook_running = True
             frame0 = self.last_output.copy()
             work_snap = (
@@ -1465,8 +1730,10 @@ class ComposerSession:
     ) -> tuple[Image.Image, Path]:
         """Upscale the currently accepted OUTPUT and save it."""
         # Ensure OUTPUT without holding the lock across SDXL.
+        # Never upscale a low-res interactive preview.
+        self.ensure_full_output()
         if self.last_output is None:
-            self.run_output()
+            self.run_output(preview=False)
 
         with self._lock:
             source = self.last_output or self.last_work or compose_work_image(self.doc)
@@ -1551,11 +1818,80 @@ class ComposerSession:
         image.save(path)
         return path
 
-    def free_optional(self) -> str:
-        """Unload LLM and upscaler to free VRAM."""
+    def _unload_compose_stack(self) -> list[str]:
+        """Unload Flux / isolator / LLM / upscaler. Keeps shared SDXL."""
+        unloaded: list[str] = []
+        self._flux_reload_pending = False
+        if self.flux and self.flux.ready:
+            self.flux.unload()
+            unloaded.append("Flux")
         if self.llm:
+            was = bool(getattr(self.llm, "ready", False))
             self.llm.unload()
+            if was:
+                unloaded.append("LLM")
         if self.upscaler:
             self.upscaler.unload()
+            unloaded.append("upscaler")
+        if self.isolator:
+            try:
+                self.isolator.unload()
+                unloaded.append("isolator")
+            except Exception:  # noqa: BLE001
+                logger.debug("isolator unload failed", exc_info=True)
         empty_cache()
-        return f"Optional models unloaded. {gpu_summary()}"
+        return unloaded
+
+    def enter_compose_mode(self) -> str:
+        """Activate Compose (Flux + WORK/OUTPUT). Does not auto-load models."""
+        with self._lock:
+            self.active_system = "compose"
+            empty_cache()
+            self.status = (
+                f"Compose mode active. Press Load models if Flux is unloaded. "
+                f"{gpu_summary()}"
+            )
+            return self.status
+
+    def enter_infinite_canvas_mode(self) -> str:
+        """Activate Infinite Canvas: unload Compose stack, keep SDXL for stamps."""
+        with self._lock:
+            self.active_system = "infinite_canvas"
+            flux_was_loaded = bool(self.flux and self.flux.ready)
+            unloaded = self._unload_compose_stack()
+            # Drop CUDA-graph pools only when Flux actually held them. This
+            # method runs before every generate; an unconditional reset forced
+            # a full UNet recompile per patch (~16s instead of ~2s).
+            if flux_was_loaded and self.sdxl and getattr(
+                self.sdxl, "optimization_report", None
+            ):
+                if self.sdxl.optimization_report.compiled:
+                    try:
+                        import torch
+
+                        torch.compiler.reset()
+                    except Exception:  # noqa: BLE001
+                        pass
+            empty_cache()
+            what = ", ".join(unloaded) if unloaded else "Compose stack already clear"
+            self.status = (
+                f"Infinite Canvas mode — unloaded {what}. "
+                f"SDXL kept for region gen. {gpu_summary()}"
+            )
+            return self.status
+
+    def free_optional(self) -> str:
+        """Unload Compose stack (Flux etc.); keep SDXL. Used by Free VRAM buttons."""
+        with self._lock:
+            unloaded = self._unload_compose_stack()
+            what = ", ".join(unloaded) if unloaded else "caches"
+            self.status = f"Freed {what}. SDXL kept loaded. {gpu_summary()}"
+            return self.status
+
+    @property
+    def compose_active(self) -> bool:
+        return self.active_system == "compose"
+
+    @property
+    def infinite_canvas_active(self) -> bool:
+        return self.active_system == "infinite_canvas"

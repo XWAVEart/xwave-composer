@@ -31,8 +31,10 @@ from xwave_composer.optimization import (
     normalize_profile,
     profile_label,
 )
+from xwave_composer.pipeline.quality_modes import normalize_quality_mode
 from xwave_composer.pipeline.session import ComposerSession
-from xwave_composer.style.style_manager import STYLE_FAMILIES
+from xwave_composer.style.style_manager import CONCAT_ORDERS, STYLE_FAMILIES
+from xwave_composer.ui.large_canvas_tab import build_large_canvas_tab
 from xwave_composer.models.upscaler import (
     DEFAULT_SEEDVR2_MODEL,
     SEEDVR2_MODEL_CHOICES,
@@ -98,12 +100,46 @@ DEFAULT_ASPECT = "1:1 · 1024×1024"
 NO_STYLE = "— none —"
 FAMILY_ALL = "All families"
 
-CONCAT_ORDERS = {
-    "Prefix · Prompts · Suffix": "pcs",
-    "Prefix · Suffix · Prompts": "psc",
-    "Prompts · Prefix · Suffix": "cps",
-    "Suffix · Prefix · Prompts": "spc",
+# WORK-only alignment overlays (canvas JS reads #xwave-grid-state).
+WORK_GRID_TYPES = [
+    "Off",
+    "Center",
+    "Thirds",
+    "Golden",
+    "Quadrants",
+    "Diagonals",
+    "Safe margins",
+]
+WORK_GRID_COLORS = ["Black", "White", "Cyan", "Magenta"]
+_WORK_GRID_TYPE_KEYS = {
+    "off": "off",
+    "center": "center",
+    "thirds": "thirds",
+    "golden": "golden",
+    "quadrants": "quadrants",
+    "diagonals": "diagonals",
+    "safe margins": "safe_margins",
+    "safe_margins": "safe_margins",
 }
+
+
+def _work_grid_state_html(
+    grid_type: str | None,
+    grid_color: str | None,
+    *,
+    user_set: bool = False,
+) -> str:
+    t_raw = str(grid_type or "Off").strip().lower()
+    t = _WORK_GRID_TYPE_KEYS.get(t_raw, "off")
+    c = str(grid_color or "Cyan").strip().lower()
+    if c not in ("black", "white", "cyan", "magenta"):
+        c = "cyan"
+    user_attr = ' data-user="1"' if user_set else ""
+    return (
+        f'<div id="xwave-grid-state" data-type="{html_lib.escape(t)}" '
+        f'data-color="{html_lib.escape(c)}"{user_attr} '
+        f'hidden aria-hidden="true"></div>'
+    )
 
 ISO_WHITE = "isolated on plain white background, centered"
 ISO_BLACK = "isolated on plain black background, centered"
@@ -276,6 +312,7 @@ def render_layers_html(session: ComposerSession) -> str:
     for obj in reversed(session.doc.objects):  # top-most first
         sel = " is-selected" if session.doc.selected_id == obj.id else ""
         muted = " is-muted" if not obj.prompt_enabled else ""
+        hidden = " is-hidden" if not obj.transform.visible else ""
         thumb_url = _media_url(f"thumb:{obj.id}", obj.image, 96, cache_dir) or ""
         thumb = (
             f' style="background-image:url(&quot;{html_lib.escape(thumb_url)}&quot;)"'
@@ -284,11 +321,16 @@ def render_layers_html(session: ComposerSession) -> str:
         )
         text = (obj.prompt or "").strip() or "empty — type a prompt below"
         empty = "" if (obj.prompt or "").strip() else " is-empty"
-        label_text = f"MUTED · {text}" if not obj.prompt_enabled else text
+        tags: list[str] = []
+        if not obj.transform.visible:
+            tags.append("HIDDEN")
+        if not obj.prompt_enabled:
+            tags.append("MUTED")
+        label_text = f"{' · '.join(tags)} · {text}" if tags else text
         label = html_lib.escape(label_text[:72])
         lid = html_lib.escape(obj.id)
         cards.append(
-            f'<div class="xwave-card{sel}{empty}{muted}" data-layer-id="{lid}" draggable="true">'
+            f'<div class="xwave-card{sel}{empty}{muted}{hidden}" data-layer-id="{lid}" draggable="true">'
             f'<div class="xwave-thumb"{thumb}></div>'
             f'<div class="xwave-card-text">{label}</div>'
             f'<button type="button" class="xwave-del" data-delete-id="{lid}" '
@@ -329,6 +371,7 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "blend_mode": "Normal",
             "raw": None,
             "prompt_enabled": True,
+            "visible": True,
             "bg_scale": float(session.doc.bg_scale),
             "bg_rotation": float(session.doc.bg_rotation),
             "bg_offset_x": float(session.doc.bg_offset_x),
@@ -351,6 +394,7 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
             "blend_mode": "Normal",
             "raw": None,
             "prompt_enabled": True,
+            "visible": True,
             "bg_scale": 1.0,
             "bg_rotation": 0.0,
             "bg_offset_x": 0.0,
@@ -373,6 +417,7 @@ def _inspector(session: ComposerSession) -> dict[str, Any]:
         "blend_mode": blend_mode_label(getattr(obj, "blend_mode", "normal")),
         "raw": obj.raw_image,
         "prompt_enabled": obj.prompt_enabled,
+        "visible": bool(obj.transform.visible),
         "bg_scale": 1.0,
         "bg_rotation": 0.0,
         "bg_offset_x": 0.0,
@@ -426,7 +471,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
     css = (ASSETS / "app.css").read_text(encoding="utf-8") if (ASSETS / "app.css").exists() else ""
     js_parts: list[str] = []
-    for name in ("work_canvas.js", "tooltips.js"):
+    for name in ("work_canvas.js", "tooltips.js", "large_canvas.js"):
         path = ASSETS / name
         if path.exists():
             js_parts.append(path.read_text(encoding="utf-8"))
@@ -441,9 +486,23 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         session.styles.families_present() if session.styles else list(STYLE_FAMILIES)
     )
     base_names = list(BASE_MODEL_PRESETS.keys())
+    _cfg_base = str(
+        config.get(
+            "sdxl_hyper",
+            "base_model_id",
+            default=BASE_MODEL_PRESETS.get("Juggernaut XL v9", BASE_MODEL_PRESETS[base_names[0]]),
+        )
+    )
+    default_base_name = next(
+        (name for name, ref in BASE_MODEL_PRESETS.items() if ref == _cfg_base),
+        "Juggernaut XL v9" if "Juggernaut XL v9" in BASE_MODEL_PRESETS else base_names[0],
+    )
 
-    # Debounced OUTPUT refresh driven by canvas transforms
+    # Debounced OUTPUT refresh driven by canvas transforms.
+    # One full-quality refine after movement stops — no preview/settle swap.
     out_lock = threading.Lock()
+    # Shared SDXL mutex between Compose OUTPUT and Infinite Canvas generation.
+    infer_lock = threading.Lock()
     out_state: dict[str, Any] = {
         "token": 0,
         "running": False,
@@ -457,7 +516,8 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             # Always re-read last_work under the session lock inside
             # run_output(). Snapshotting WORK here races with later
             # transforms and can refine a stale pose.
-            return session.run_output()
+            with infer_lock:
+                return session.run_output(preview=False)
         except Exception as exc:  # noqa: BLE001
             logger.exception("OUTPUT")
             session.status = f"OUTPUT error: {exc}"
@@ -474,6 +534,10 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
     def mark_output_dirty(delay_override: float | None = None) -> None:
         with out_lock:
             out_state["dirty"] = True
+            if not session.compose_active:
+                # Infinite Canvas owns the GPU — defer OUTPUT until Compose mode.
+                out_state["pending"] = True
+                return
             if not session.core_ready:
                 # Never trigger a surprise model download from a drag — remember
                 # the request and flush after Load / post-export SDXL restore.
@@ -499,8 +563,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 out_state["dirty"] = False
             try:
                 # Re-check after the sleep — SDXL may have been unloaded for
-                # a SeedVR2 export while this worker was waiting.
-                if not session.core_ready:
+                # a SeedVR2 export while this worker was waiting, or the user
+                # switched to Infinite Canvas.
+                if not session.compose_active or not session.core_ready:
                     with out_lock:
                         out_state["dirty"] = True
                         out_state["pending"] = True
@@ -548,7 +613,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         insp_prompt, iso_backdrop, iso_white_btn, iso_black_btn,
         insp_opacity, insp_feather, insp_blend,
         raw_view, prompt_view,
-        llm_prompt_view, mute_prompt_btn, cutout_chk, cutout_mode,
+        llm_prompt_view, mute_prompt_btn, hide_layer_btn, cutout_chk, cutout_mode,
         obj_scale, obj_rotation, obj_flip_x, obj_flip_y,
         bg_scale, bg_rotation, bg_offset_x, bg_offset_y, bg_flip_x, bg_flip_y
 
@@ -639,6 +704,10 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 interactive=obj_on,
             ),
             gr.update(
+                value=("Hide" if insp.get("visible", True) else "Show"),
+                interactive=obj_on,
+            ),
+            gr.update(
                 value=bool(session.layer_cutout),
                 visible=obj_on,
             ),
@@ -677,768 +746,829 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             elem_classes=["xwave-brand-wrap"],
         )
 
-        # ══ ROW 1 — top bars ═══════════════════════════════════════
-        with gr.Row(elem_classes=["xwave-row", "xwave-topbar"], equal_height=True):
-            with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col"]):
-                with gr.Row(elem_classes=["xwave-bar-row"]):
-                    load_btn = gr.Button("Load models", variant="primary", size="sm", scale=0, min_width=104)
-                    free_btn = gr.Button("Free VRAM", size="sm", scale=0, min_width=88)
-                    status = gr.Textbox(
-                        show_label=False,
-                        value="Ready — press Load models to begin.",
-                        interactive=False,
-                        lines=1,
-                        max_lines=1,
-                        scale=4,
-                        min_width=140,
-                        elem_classes=["xwave-status"],
-                        container=False,
-                    )
-                active_profile = session.compute_profile
-                with gr.Row(elem_classes=["xwave-performance-buttons"]):
-                    vram_html = gr.HTML(
-                        value=render_vram_html(),
-                        padding=False,
-                        elem_classes=["xwave-vram-block"],
-                    )
-                    bf16_btn = gr.Button(
-                        "BF16",
-                        size="sm",
-                        scale=1,
-                        min_width=64,
-                        variant="primary" if active_profile == "bf16" else "secondary",
-                    )
-                    mxfp8_btn = gr.Button(
-                        "MXFP8",
-                        size="sm",
-                        scale=1,
-                        min_width=72,
-                        variant="primary" if active_profile == "mxfp8" else "secondary",
-                    )
-                    nvfp4_btn = gr.Button(
-                        "NVFP4",
-                        size="sm",
-                        scale=1,
-                        min_width=72,
-                        variant="primary" if active_profile == "nvfp4" else "secondary",
-                    )
-            with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col", "xwave-knob-col"]):
-                with gr.Row(elem_classes=["xwave-bar-row", "xwave-knob-row"]):
-                    cfg = gr.Number(
-                        value=session.output_settings.cfg,
-                        label="CFG",
-                        minimum=0.0,
-                        maximum=15.0,
-                        step=0.1,
-                        scale=0,
-                        min_width=60,
-                        elem_classes=["xwave-knob", "xwave-knob-num"],
-                    )
-                    denoise = gr.Slider(
-                        0.05, 0.95,
-                        value=session.output_settings.denoise,
-                        step=0.01,
-                        label="Denoise",
-                        scale=1,
-                        min_width=140,
-                        elem_classes=["xwave-knob", "xwave-knob-slider"],
-                    )
-                    out_steps = gr.Slider(
-                        1, 20,
-                        value=session.output_settings.steps,
-                        step=1,
-                        label="Steps",
-                        scale=1,
-                        min_width=120,
-                        elem_classes=["xwave-knob", "xwave-knob-slider"],
-                    )
-                    eta = gr.Number(
-                        value=session.output_settings.eta,
-                        label="Eta",
-                        minimum=0.0,
-                        maximum=1.0,
-                        step=0.05,
-                        scale=0,
-                        min_width=60,
-                        elem_classes=["xwave-knob", "xwave-knob-num"],
-                    )
-        # ══ ROW 2 — canvases, perfectly side by side ═══════════════
-        with gr.Row(elem_classes=["xwave-row", "xwave-canvases"], equal_height=False):
-            with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col"]):
-                with gr.Group(elem_classes=["xwave-canvas-frame"]):
-                    work_html = gr.HTML(value=render_work_html(_scene_dict(session)), padding=False)
-
-            with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col"]):
-                with gr.Group(elem_classes=["xwave-canvas-frame"]):
-                    output_image = gr.Image(
-                        value=_output_jpeg_path(_blank(cw, ch)),
-                        type="filepath",
-                        format="jpeg",
-                        show_label=False,
-                        interactive=False,
-                        buttons=["download", "fullscreen"],
-                        elem_classes=["xwave-out-img"],
-                    )
-
-        # ══ ROW 3 — layers | properties ═══════════════════════════
-        with gr.Row(elem_classes=["xwave-row", "xwave-bottom"], equal_height=False):
-            with gr.Column(scale=1, min_width=230, elem_classes=["xwave-col", "xwave-layers-col"]):
-                with gr.Row(elem_classes=["xwave-layers-head"]):
-                    gr.Markdown('<p class="xwave-section-head">Layers</p>')
-                    reset_workspace_btn = gr.Button(
-                        "Reset", size="sm", scale=0, min_width=64,
-                    )
-                    add_obj_btn = gr.Button(
-                        "+ Layer", size="sm", scale=0, min_width=72,
-                        elem_classes=["xwave-add-btn"],
-                    )
-                layers_html = gr.HTML(value=render_layers_html(session), padding=False)
-                with gr.Row(elem_classes=["xwave-canvas-size"]):
-                    aspect = gr.Dropdown(
-                        label="Canvas size",
-                        choices=list(ASPECT_PRESETS.keys()),
-                        value=DEFAULT_ASPECT,
-                        scale=1,
-                        elem_classes=["xwave-canvas-aspect"],
-                    )
-                    apply_size_btn = gr.Button(
-                        "Apply",
-                        size="sm",
-                        scale=0,
-                        min_width=64,
-                        elem_classes=["xwave-canvas-apply"],
-                    )
-
-            with gr.Column(scale=3, min_width=420, elem_classes=["xwave-col", "xwave-props-col"]):
-                with gr.Row(elem_classes=["xwave-props-grid"]):
-                    # —— Selected layer: prompt + generate ——
-                    with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
-                        gr.Markdown('<p class="xwave-section-head">Layer</p>')
-                        insp_prompt = gr.Textbox(
-                            show_label=False,
-                            container=False,
-                            placeholder="Layer prompt — select a layer, type, Generate…",
-                            lines=2,
-                            max_lines=3,
-                        )
-                        with gr.Row(elem_classes=["xwave-iso-row"]):
-                            cutout_chk = gr.Checkbox(
-                                label="✂️",
-                                value=True,
-                                visible=False,
-                                scale=0,
-                                min_width=40,
-                                elem_classes=["xwave-mini-check", "xwave-cutout-chk"],
-                            )
-                            iso_backdrop = gr.State(value="White")
-                            iso_white_btn = gr.Button(
-                                "⬜",
-                                size="sm",
-                                scale=0,
-                                min_width=36,
-                                visible=False,
-                                elem_classes=["xwave-iso-swatch", "xwave-iso-white"],
-                            )
-                            iso_black_btn = gr.Button(
-                                "⬛",
-                                size="sm",
-                                scale=0,
-                                min_width=36,
-                                visible=False,
-                                elem_classes=["xwave-iso-swatch", "xwave-iso-black"],
-                            )
-                            gen_btn = gr.Button(
-                                "▶️",
-                                variant="primary",
-                                size="sm",
-                                scale=0,
-                                min_width=40,
-                                elem_classes=["xwave-gen-btn"],
-                            )
-                            gen_seed = gr.Number(
-                                value=-1,
-                                precision=0,
+        with gr.Tabs(elem_classes=["xwave-main-tabs"]) as main_tabs:
+            with gr.Tab("Compose", elem_id="xwave-compose-tab"):
+                # ══ ROW 1 — top bars ═══════════════════════════════════════
+                with gr.Row(elem_classes=["xwave-row", "xwave-topbar"], equal_height=True):
+                    with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col"]):
+                        with gr.Row(elem_classes=["xwave-bar-row"]):
+                            load_btn = gr.Button("Load models", variant="primary", size="sm", scale=0, min_width=104)
+                            free_btn = gr.Button("Free VRAM", size="sm", scale=0, min_width=88)
+                            status = gr.Textbox(
                                 show_label=False,
-                                container=False,
-                                scale=1,
-                                min_width=88,
-                                elem_classes=["xwave-seed", "xwave-iso-seed"],
-                            )
-                        # Background pose (numbers) + flips on their own row
-                        # so FlipV never clips off the panel edge.
-                        with gr.Row(elem_classes=["xwave-xform-strip", "xwave-bg-xform"]):
-                            bg_scale = gr.Number(
-                                label="Scale",
-                                value=1.0,
-                                precision=3,
-                                minimum=0.05,
-                                maximum=8.0,
-                                step=0.05,
-                                visible=True,
-                                scale=1,
-                                min_width=56,
-                                elem_classes=["xwave-knob", "xwave-mini"],
-                            )
-                            bg_rotation = gr.Number(
-                                label="Rot°",
-                                value=0.0,
-                                precision=1,
-                                step=1.0,
-                                visible=True,
-                                scale=1,
-                                min_width=52,
-                                elem_classes=["xwave-knob", "xwave-mini"],
-                            )
-                            bg_offset_x = gr.Number(
-                                label="X",
-                                value=0.0,
-                                precision=1,
-                                step=1.0,
-                                visible=True,
-                                scale=1,
-                                min_width=52,
-                                elem_classes=["xwave-knob", "xwave-mini"],
-                            )
-                            bg_offset_y = gr.Number(
-                                label="Y",
-                                value=0.0,
-                                precision=1,
-                                step=1.0,
-                                visible=True,
-                                scale=1,
-                                min_width=52,
-                                elem_classes=["xwave-knob", "xwave-mini"],
-                            )
-                        with gr.Row(
-                            elem_classes=["xwave-xform-strip", "xwave-flip-row", "xwave-bg-xform"]
-                        ):
-                            bg_flip_x = gr.Checkbox(
-                                label="Flip H",
-                                value=False,
-                                visible=True,
-                                scale=1,
-                                min_width=72,
-                                elem_classes=["xwave-mini-check"],
-                            )
-                            bg_flip_y = gr.Checkbox(
-                                label="Flip V",
-                                value=False,
-                                visible=True,
-                                scale=1,
-                                min_width=72,
-                                elem_classes=["xwave-mini-check"],
-                            )
-                        # Object pose: scale / rotate / flip
-                        with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
-                            obj_scale = gr.Number(
-                                label="Scale",
-                                value=1.0,
-                                precision=3,
-                                minimum=0.05,
-                                maximum=8.0,
-                                step=0.05,
-                                visible=False,
-                                scale=1,
-                                min_width=56,
-                                elem_classes=["xwave-knob", "xwave-mini"],
-                            )
-                            obj_rotation = gr.Number(
-                                label="Rot°",
-                                value=0.0,
-                                precision=1,
-                                step=1.0,
-                                visible=False,
-                                scale=1,
-                                min_width=52,
-                                elem_classes=["xwave-knob", "xwave-mini"],
-                            )
-                        with gr.Row(
-                            elem_classes=["xwave-xform-strip", "xwave-flip-row", "xwave-obj-xform"]
-                        ):
-                            obj_flip_x = gr.Checkbox(
-                                label="Flip H",
-                                value=False,
-                                visible=False,
-                                scale=1,
-                                min_width=72,
-                                elem_classes=["xwave-mini-check"],
-                            )
-                            obj_flip_y = gr.Checkbox(
-                                label="Flip V",
-                                value=False,
-                                visible=False,
-                                scale=1,
-                                min_width=72,
-                                elem_classes=["xwave-mini-check"],
-                            )
-                        # Object look: opacity / feather / blend
-                        with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
-                            insp_opacity = gr.Slider(
-                                0.0,
-                                1.0,
-                                value=1.0,
-                                step=0.01,
-                                label="Opacity",
-                                visible=False,
-                                scale=1,
-                                min_width=100,
-                                elem_classes=["xwave-mini-slider"],
-                            )
-                            insp_feather = gr.Slider(
-                                0.0,
-                                128.0,
-                                value=0.0,
-                                step=1.0,
-                                label="Feather",
-                                visible=False,
-                                scale=1,
-                                min_width=100,
-                                elem_classes=["xwave-mini-slider"],
-                            )
-                        with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
-                            insp_blend = gr.Dropdown(
-                                choices=BLEND_MODE_LABELS,
-                                value="Normal",
-                                label="Blend",
-                                visible=False,
-                                scale=1,
-                                min_width=120,
-                                elem_classes=["xwave-mini-dd"],
-                            )
-                        with gr.Row(elem_classes=["xwave-action-row"]):
-                            mute_prompt_btn = gr.Button(
-                                "Mute", size="sm", scale=1, min_width=56
-                            )
-                            duplicate_btn = gr.Button(
-                                "Dup", size="sm", scale=1, min_width=48
-                            )
-                        with gr.Row(elem_classes=["xwave-action-row"]):
-                            reset_xform_btn = gr.Button(
-                                "Reset", size="sm", scale=1, min_width=56
-                            )
-                            reisolate_btn = gr.Button(
-                                "Re-cut", size="sm", scale=1, min_width=56
-                            )
-                            delete_btn = gr.Button(
-                                "Delete",
-                                size="sm",
-                                variant="stop",
-                                scale=1,
-                                min_width=56,
-                            )
-                        cutout_mode = gr.Radio(
-                            choices=["rembg", "SAM2", "none"],
-                            value="rembg",
-                            show_label=False,
-                            container=False,
-                            visible=False,
-                            elem_classes=["xwave-cutout-mode", "xwave-compact-radio"],
-                        )
-                        raw_view = gr.Image(
-                            label="Raw — click the subject to re-cut with SAM2",
-                            type="pil",
-                            interactive=False,
-                            visible=False,
-                            height=140,
-                            buttons=[],
-                            elem_classes=["xwave-raw-view"],
-                        )
-                        with gr.Accordion("Import image", open=False):
-                            import_img = gr.Image(
-                                type="pil",
-                                label="Drop or upload",
-                                height=100,
-                                buttons=[],
-                                elem_classes=["xwave-import"],
-                            )
-                            import_btn = gr.Button("Import into layer", size="sm")
-
-                    # —— Output style ——
-                    with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
-                        gr.Markdown('<p class="xwave-section-head">Style</p>')
-                        style_family_dd = gr.Dropdown(
-                            choices=style_family_choices,
-                            value=FAMILY_ALL,
-                            label="Family",
-                            show_label=False,
-                            container=False,
-                            filterable=False,
-                            elem_classes=["xwave-style-family"],
-                        )
-                        style_dd = gr.Dropdown(
-                            choices=style_names,
-                            value=NO_STYLE,
-                            label="Style",
-                            show_label=False,
-                            container=False,
-                            filterable=True,
-                            elem_classes=["xwave-style-name"],
-                        )
-                        with gr.Row(elem_classes=["xwave-seed-row", "xwave-style-seed"]):
-                            out_seed = gr.Number(
-                                value=session.output_settings.seed,
-                                precision=0,
-                                show_label=False,
-                                container=False,
-                                scale=1,
-                                min_width=88,
-                                elem_classes=["xwave-seed", "xwave-style-seed-num"],
-                            )
-                            roll_seed_btn = gr.Button(
-                                "🎲",
-                                size="sm",
-                                scale=0,
-                                min_width=36,
-                                elem_classes=["xwave-roll-seed"],
-                            )
-                        with gr.Accordion(
-                            "Prompt options",
-                            open=False,
-                            elem_classes=["xwave-style-opts"],
-                        ):
-                            concat_dd = gr.Dropdown(
-                                label="Prompt order",
-                                choices=list(CONCAT_ORDERS.keys()),
-                                value="Prefix · Prompts · Suffix",
-                            )
-                            manual_chk = gr.Checkbox(
-                                label="Manual style (own prefix/suffix)", value=False
-                            )
-                            manual_prefix = gr.Textbox(
-                                label="Manual prefix", lines=1, visible=False,
-                                placeholder="e.g. watercolor illustration of",
-                            )
-                            manual_suffix = gr.Textbox(
-                                label="Manual suffix", lines=1, visible=False,
-                                placeholder="e.g. soft pastel palette, paper texture",
-                            )
-                            neg_prompt = gr.Textbox(
-                                label="Negative prompt",
-                                value=session.output_settings.negative_prompt,
-                                lines=2,
-                                max_lines=3,
-                            )
-                        # Concatenation result (always available)
-                        with gr.Group(elem_classes=["xwave-built-prompt"]):
-                            with gr.Row():
-                                use_llm = gr.Checkbox(
-                                    label="LLM rewrite", value=False, scale=1,
-                                )
-                                prompt_lock = gr.Checkbox(
-                                    label="Edit built prompt (lock auto-build)",
-                                    value=False,
-                                    scale=1,
-                                )
-                            prompt_view = gr.Textbox(
-                                label="Built prompt",
-                                lines=2,
-                                max_lines=4,
-                                interactive=False,
-                            )
-                        # Shown when LLM rewrite is on — the rewritten prompt, optionally editable
-                        llm_prompt_lock = gr.Checkbox(
-                            label="Edit LLM prompt (lock rewrite)",
-                            value=False,
-                            visible=False,
-                        )
-                        llm_prompt_view = gr.Textbox(
-                            label="LLM rewritten prompt",
-                            lines=3,
-                            max_lines=6,
-                            interactive=False,
-                            visible=False,
-                            placeholder="Enable LLM rewrite to generate…",
-                        )
-
-                    # —— Model + export ——
-                    with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
-                        gr.Markdown('<p class="xwave-section-head">Output model</p>')
-                        with gr.Row():
-                            base_dd = gr.Dropdown(
-                                choices=base_names,
-                                value=base_names[0],
-                                show_label=False,
-                                container=False,
-                                scale=2,
-                            )
-                            base_btn = gr.Button("Load", size="sm", scale=0, min_width=64)
-                        base_custom = gr.Textbox(
-                            show_label=False,
-                            container=False,
-                            placeholder="…or HF repo id / CivitAI .safetensors link",
-                            lines=1,
-                        )
-                        performance_dd = gr.Dropdown(
-                            label="Performance",
-                            choices=PROFILE_CHOICES,
-                            value=profile_label(session.compute_profile),
-                        )
-                        performance_status = gr.Textbox(
-                            label="Applied compute",
-                            value=session.optimization_status(),
-                            interactive=False,
-                            lines=2,
-                            max_lines=3,
-                        )
-                        with gr.Accordion("Style adapters (LoRA / TI)", open=False):
-                            lora_path = gr.Textbox(label="LoRA path or HF id", lines=1)
-                            lora_scale = gr.Slider(0, 1.5, value=0.8, step=0.05, label="LoRA scale")
-                            load_lora_btn = gr.Button("Load LoRA", size="sm")
-                            emb_path = gr.Textbox(label="Textual inversion path or id", lines=1)
-                            load_emb_btn = gr.Button("Load TI", size="sm")
-                        gr.Markdown('<p class="xwave-section-head">Final output</p>')
-                        with gr.Row():
-                            final_refine_strength = gr.Slider(
-                                0.05,
-                                0.95,
-                                value=float(
-                                    config.get(
-                                        "export",
-                                        "default_refine_strength",
-                                        default=0.3,
-                                    )
-                                ),
-                                step=0.01,
-                                label="Refine strength",
-                                scale=2,
-                            )
-                            final_refine_steps = gr.Slider(
-                                1,
-                                40,
-                                value=int(
-                                    config.get(
-                                        "export",
-                                        "default_refine_steps",
-                                        default=8,
-                                    )
-                                ),
-                                step=1,
-                                label="Refine steps",
-                                scale=2,
-                            )
-                        with gr.Row():
-                            update_output_btn = gr.Button(
-                                "Update OUTPUT now", size="sm",
-                            )
-                            refine_output_btn = gr.Button(
-                                "Refine OUTPUT", variant="secondary", size="sm",
-                            )
-                        with gr.Accordion("SeedVR2 export settings", open=False):
-                            seedvr_preset = gr.Dropdown(
-                                label="Preset",
-                                choices=SEEDVR2_PRESET_CHOICES,
-                                value="quality",
-                            )
-                            seedvr_model = gr.Dropdown(
-                                label="Model",
-                                choices=SEEDVR2_MODEL_CHOICES,
-                                value=config.get(
-                                    "export",
-                                    "seedvr2_model",
-                                    default=DEFAULT_SEEDVR2_MODEL,
-                                ),
-                            )
-                            seedvr_color = gr.Dropdown(
-                                label="Color fidelity",
-                                choices=["lab", "wavelet", "wavelet_adaptive", "none"],
-                                value=config.get(
-                                    "export",
-                                    "seedvr2_color_correction",
-                                    default="lab",
-                                ),
-                            )
-                            with gr.Row():
-                                seedvr_input_noise = gr.Slider(
-                                    0.0,
-                                    0.3,
-                                    value=float(
-                                        config.get(
-                                            "export",
-                                            "seedvr2_input_noise_scale",
-                                            default=0.0,
-                                        )
-                                    ),
-                                    step=0.01,
-                                    label="Artifact reduction",
-                                )
-                                seedvr_latent_noise = gr.Slider(
-                                    0.0,
-                                    0.2,
-                                    value=float(
-                                        config.get(
-                                            "export",
-                                            "seedvr2_latent_noise_scale",
-                                            default=0.0,
-                                        )
-                                    ),
-                                    step=0.01,
-                                    label="Detail softness",
-                                )
-                            seedvr_seed = gr.Number(
-                                label="Seed",
-                                value=int(
-                                    config.get(
-                                        "export",
-                                        "seedvr2_seed",
-                                        default=42,
-                                    )
-                                ),
-                                precision=0,
-                            )
-                            with gr.Accordion("Advanced — VRAM / speed", open=False):
-                                seedvr_blocks = gr.Slider(
-                                    0,
-                                    36,
-                                    value=int(
-                                        config.get(
-                                            "export",
-                                            "seedvr2_blocks_to_swap",
-                                            default=0,
-                                        )
-                                    ),
-                                    step=1,
-                                    label="BlockSwap (0 = off)",
-                                    info="Offloads DiT blocks to CPU. Auto-sets offload=cpu when > 0.",
-                                )
-                                seedvr_swap_io = gr.Checkbox(
-                                    label="Swap I/O components",
-                                    value=bool(
-                                        config.get(
-                                            "export",
-                                            "seedvr2_swap_io_components",
-                                            default=False,
-                                        )
-                                    ),
-                                )
-                                with gr.Row():
-                                    seedvr_dit_offload = gr.Dropdown(
-                                        label="DiT offload",
-                                        choices=["none", "cpu"],
-                                        value=str(
-                                            config.get(
-                                                "export",
-                                                "seedvr2_dit_offload_device",
-                                                default="none",
-                                            )
-                                        ),
-                                    )
-                                    seedvr_vae_offload = gr.Dropdown(
-                                        label="VAE offload",
-                                        choices=["none", "cpu"],
-                                        value=str(
-                                            config.get(
-                                                "export",
-                                                "seedvr2_vae_offload_device",
-                                                default="none",
-                                            )
-                                        ),
-                                    )
-                                seedvr_compile = gr.Checkbox(
-                                    label="Compile DiT (torch.compile)",
-                                    value=bool(
-                                        config.get(
-                                            "export",
-                                            "seedvr2_compile_dit",
-                                            default=False,
-                                        )
-                                    ),
-                                    info="Faster later exports; first run pays compile cost.",
-                                )
-                        export_btn = gr.Button(
-                            "Export accepted OUTPUT 2× with SeedVR2",
-                            variant="primary",
-                            size="sm",
-                            elem_classes=["xwave-export-btn"],
-                        )
-                        export_path = gr.Textbox(
-                            label="Export path", interactive=False, lines=1
-                        )
-                        export_image = gr.Image(
-                            label="Export preview",
-                            type="filepath",
-                            format="jpeg",
-                            interactive=False,
-                            height=140,
-                            buttons=["download"],
-                        )
-                        with gr.Accordion(
-                            "Export Style Flipbook",
-                            open=False,
-                            elem_classes=["xwave-flipbook"],
-                        ):
-                            style_preset_count = (
-                                len(session.styles.names()) if session.styles else 0
-                            )
-                            flipbook_mode = gr.Radio(
-                                choices=["Styles", "Seeds"],
-                                value="Styles",
-                                label="Mode",
-                                elem_classes=["xwave-flipbook-mode"],
-                            )
-                            flipbook_families = gr.CheckboxGroup(
-                                choices=flipbook_family_choices,
-                                value=list(flipbook_family_choices),
-                                label="Families",
-                                elem_classes=["xwave-flipbook-families"],
-                            )
-                            flipbook_count = gr.Number(
-                                label="Styles (0 = all in checked families)",
-                                value=min(32, style_preset_count) if style_preset_count else 32,
-                                precision=0,
-                                minimum=0,
-                                maximum=max(style_preset_count, 1),
-                            )
-                            flipbook_fps = gr.Radio(
-                                choices=[24, 30, 48, 60],
-                                value=30,
-                                label="FPS",
-                            )
-                            flipbook_hold = gr.Number(
-                                label="Frames per image",
-                                value=8,
-                                precision=0,
-                                minimum=1,
-                                maximum=120,
-                            )
-                            flipbook_seed_mode = gr.State(value="lock")
-                            with gr.Row(elem_classes=["xwave-flipbook-seed"]):
-                                flipbook_lock_btn = gr.Button(
-                                    "🔒",
-                                    size="sm",
-                                    scale=0,
-                                    min_width=36,
-                                    variant="primary",
-                                    elem_classes=["xwave-flipbook-lock"],
-                                )
-                                flipbook_dice_btn = gr.Button(
-                                    "🎲",
-                                    size="sm",
-                                    scale=0,
-                                    min_width=36,
-                                    variant="secondary",
-                                    elem_classes=["xwave-flipbook-dice"],
-                                )
-                                flipbook_seed_hint = gr.Markdown(
-                                    '<p class="xwave-flipbook-seed-hint">'
-                                    "🔒 same seed · 🎲 new seed per style</p>"
-                                )
-                            flipbook_btn = gr.Button(
-                                "Run style flipbook",
-                                variant="primary",
-                                size="sm",
-                                elem_classes=["xwave-flipbook-run"],
-                            )
-                            flipbook_path = gr.Textbox(
-                                label="Flipbook path",
+                                value="Ready — press Load models to begin.",
                                 interactive=False,
                                 lines=1,
+                                max_lines=1,
+                                scale=4,
+                                min_width=140,
+                                elem_classes=["xwave-status"],
+                                container=False,
                             )
-                            flipbook_video = gr.Video(
-                                label="Flipbook preview",
+                        active_profile = session.compute_profile
+                        with gr.Row(elem_classes=["xwave-performance-buttons"]):
+                            vram_html = gr.HTML(
+                                value=render_vram_html(),
+                                padding=False,
+                                elem_classes=["xwave-vram-block"],
+                            )
+                            bf16_btn = gr.Button(
+                                "BF16",
+                                size="sm",
+                                scale=1,
+                                min_width=64,
+                                variant="primary" if active_profile == "bf16" else "secondary",
+                            )
+                            mxfp8_btn = gr.Button(
+                                "MXFP8",
+                                size="sm",
+                                scale=1,
+                                min_width=72,
+                                variant="primary" if active_profile == "mxfp8" else "secondary",
+                            )
+                            nvfp4_btn = gr.Button(
+                                "NVFP4",
+                                size="sm",
+                                scale=1,
+                                min_width=72,
+                                variant="primary" if active_profile == "nvfp4" else "secondary",
+                            )
+                    with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col", "xwave-knob-col"]):
+                        active_quality = normalize_quality_mode(session.quality_mode)
+                        with gr.Row(elem_classes=["xwave-bar-row", "xwave-quality-row"]):
+                            fast_btn = gr.Button(
+                                "Fast",
+                                size="sm",
+                                scale=0,
+                                min_width=64,
+                                variant="primary" if active_quality == "fast" else "secondary",
+                                elem_classes=["xwave-quality-fast"],
+                            )
+                            quality_btn = gr.Button(
+                                "Quality",
+                                size="sm",
+                                scale=0,
+                                min_width=80,
+                                variant="primary" if active_quality == "quality" else "secondary",
+                                elem_classes=["xwave-quality-hq"],
+                            )
+                        with gr.Row(elem_classes=["xwave-bar-row", "xwave-knob-row"]):
+                            cfg = gr.Number(
+                                value=session.output_settings.cfg,
+                                label="CFG",
+                                minimum=0.0,
+                                maximum=15.0,
+                                step=0.1,
+                                scale=0,
+                                min_width=60,
+                                elem_classes=["xwave-knob", "xwave-knob-num"],
+                            )
+                            denoise = gr.Slider(
+                                0.05, 0.95,
+                                value=session.output_settings.denoise,
+                                step=0.01,
+                                label="Denoise",
+                                scale=1,
+                                min_width=140,
+                                elem_classes=["xwave-knob", "xwave-knob-slider"],
+                            )
+                            out_steps = gr.Slider(
+                                1, 20,
+                                value=session.output_settings.steps,
+                                step=1,
+                                label="Steps",
+                                scale=1,
+                                min_width=120,
+                                elem_classes=["xwave-knob", "xwave-knob-slider"],
+                            )
+                            eta = gr.Number(
+                                value=session.output_settings.eta,
+                                label="Eta",
+                                minimum=0.0,
+                                maximum=1.0,
+                                step=0.05,
+                                scale=0,
+                                min_width=60,
+                                elem_classes=["xwave-knob", "xwave-knob-num"],
+                            )
+                # ══ ROW 2 — canvases, perfectly side by side ═══════════════
+                with gr.Row(elem_classes=["xwave-row", "xwave-canvases"], equal_height=False):
+                    with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col"]):
+                        with gr.Group(elem_classes=["xwave-canvas-frame"]):
+                            work_html = gr.HTML(value=render_work_html(_scene_dict(session)), padding=False)
+
+                    with gr.Column(scale=1, min_width=380, elem_classes=["xwave-col"]):
+                        with gr.Group(elem_classes=["xwave-canvas-frame"]):
+                            output_image = gr.Image(
+                                value=_output_jpeg_path(_blank(cw, ch)),
+                                type="filepath",
+                                format="jpeg",
+                                show_label=False,
                                 interactive=False,
-                                height=160,
+                                buttons=["download", "fullscreen"],
+                                elem_classes=["xwave-out-img"],
                             )
 
+                # ══ ROW 3 — layers | properties ═══════════════════════════
+                with gr.Row(elem_classes=["xwave-row", "xwave-bottom"], equal_height=False):
+                    with gr.Column(scale=1, min_width=230, elem_classes=["xwave-col", "xwave-layers-col"]):
+                        with gr.Row(elem_classes=["xwave-layers-head"]):
+                            gr.Markdown('<p class="xwave-section-head">Layers</p>')
+                            reset_workspace_btn = gr.Button(
+                                "Reset", size="sm", scale=0, min_width=64,
+                            )
+                            roll_all_btn = gr.Button(
+                                "Roll all", size="sm", scale=0, min_width=72,
+                                elem_classes=["xwave-roll-all-btn"],
+                            )
+                            add_obj_btn = gr.Button(
+                                "+ Layer", size="sm", scale=0, min_width=72,
+                                elem_classes=["xwave-add-btn"],
+                            )
+                        layers_html = gr.HTML(value=render_layers_html(session), padding=False)
+                        with gr.Row(elem_classes=["xwave-canvas-size"]):
+                            aspect = gr.Dropdown(
+                                label="Canvas size",
+                                choices=list(ASPECT_PRESETS.keys()),
+                                value=DEFAULT_ASPECT,
+                                scale=1,
+                                elem_classes=["xwave-canvas-aspect"],
+                            )
+                            apply_size_btn = gr.Button(
+                                "Apply",
+                                size="sm",
+                                scale=0,
+                                min_width=64,
+                                elem_classes=["xwave-canvas-apply"],
+                            )
+                        with gr.Row(elem_classes=["xwave-work-grid-bar"]):
+                            work_grid_type = gr.Dropdown(
+                                choices=WORK_GRID_TYPES,
+                                value="Off",
+                                label="Grid",
+                                scale=2,
+                                elem_id="xwave-work-grid-type",
+                                elem_classes=["xwave-work-grid-type"],
+                            )
+                            work_grid_color = gr.Dropdown(
+                                choices=WORK_GRID_COLORS,
+                                value="Cyan",
+                                label="Color",
+                                scale=1,
+                                elem_id="xwave-work-grid-color",
+                                elem_classes=["xwave-work-grid-color"],
+                            )
+                        work_grid_state = gr.HTML(
+                            value=_work_grid_state_html("Off", "Cyan"),
+                            padding=False,
+                            elem_classes=["xwave-work-grid-state"],
+                        )
+
+                    with gr.Column(scale=3, min_width=420, elem_classes=["xwave-col", "xwave-props-col"]):
+                        with gr.Row(elem_classes=["xwave-props-grid"]):
+                            # —— Selected layer: prompt + generate ——
+                            with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
+                                gr.Markdown('<p class="xwave-section-head">Layer</p>')
+                                insp_prompt = gr.Textbox(
+                                    show_label=False,
+                                    container=False,
+                                    placeholder="Layer prompt — select a layer, type, Generate…",
+                                    lines=2,
+                                    max_lines=3,
+                                )
+                                with gr.Row(elem_classes=["xwave-iso-row"]):
+                                    cutout_chk = gr.Checkbox(
+                                        label="✂️",
+                                        value=True,
+                                        visible=False,
+                                        scale=0,
+                                        min_width=40,
+                                        elem_classes=["xwave-mini-check", "xwave-cutout-chk"],
+                                    )
+                                    iso_backdrop = gr.State(value="White")
+                                    iso_white_btn = gr.Button(
+                                        "⬜",
+                                        size="sm",
+                                        scale=0,
+                                        min_width=36,
+                                        visible=False,
+                                        elem_classes=["xwave-iso-swatch", "xwave-iso-white"],
+                                    )
+                                    iso_black_btn = gr.Button(
+                                        "⬛",
+                                        size="sm",
+                                        scale=0,
+                                        min_width=36,
+                                        visible=False,
+                                        elem_classes=["xwave-iso-swatch", "xwave-iso-black"],
+                                    )
+                                    gen_btn = gr.Button(
+                                        "▶️",
+                                        variant="primary",
+                                        size="sm",
+                                        scale=0,
+                                        min_width=40,
+                                        elem_classes=["xwave-gen-btn"],
+                                    )
+                                    gen_seed = gr.Number(
+                                        value=-1,
+                                        precision=0,
+                                        show_label=False,
+                                        container=False,
+                                        scale=1,
+                                        min_width=88,
+                                        elem_classes=["xwave-seed", "xwave-iso-seed"],
+                                    )
+                                # Background pose (numbers) + flips on their own row
+                                # so FlipV never clips off the panel edge.
+                                with gr.Row(elem_classes=["xwave-xform-strip", "xwave-bg-xform"]):
+                                    bg_scale = gr.Number(
+                                        label="Scale",
+                                        value=1.0,
+                                        precision=3,
+                                        minimum=0.05,
+                                        maximum=8.0,
+                                        step=0.05,
+                                        visible=True,
+                                        scale=1,
+                                        min_width=56,
+                                        elem_classes=["xwave-knob", "xwave-mini"],
+                                    )
+                                    bg_rotation = gr.Number(
+                                        label="Rot°",
+                                        value=0.0,
+                                        precision=1,
+                                        step=1.0,
+                                        visible=True,
+                                        scale=1,
+                                        min_width=52,
+                                        elem_classes=["xwave-knob", "xwave-mini"],
+                                    )
+                                    bg_offset_x = gr.Number(
+                                        label="X",
+                                        value=0.0,
+                                        precision=1,
+                                        step=1.0,
+                                        visible=True,
+                                        scale=1,
+                                        min_width=52,
+                                        elem_classes=["xwave-knob", "xwave-mini"],
+                                    )
+                                    bg_offset_y = gr.Number(
+                                        label="Y",
+                                        value=0.0,
+                                        precision=1,
+                                        step=1.0,
+                                        visible=True,
+                                        scale=1,
+                                        min_width=52,
+                                        elem_classes=["xwave-knob", "xwave-mini"],
+                                    )
+                                with gr.Row(
+                                    elem_classes=["xwave-xform-strip", "xwave-flip-row", "xwave-bg-xform"]
+                                ):
+                                    bg_flip_x = gr.Checkbox(
+                                        label="Flip H",
+                                        value=False,
+                                        visible=True,
+                                        scale=1,
+                                        min_width=72,
+                                        elem_classes=["xwave-mini-check"],
+                                    )
+                                    bg_flip_y = gr.Checkbox(
+                                        label="Flip V",
+                                        value=False,
+                                        visible=True,
+                                        scale=1,
+                                        min_width=72,
+                                        elem_classes=["xwave-mini-check"],
+                                    )
+                                # Object pose: scale / rotate / flip
+                                with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
+                                    obj_scale = gr.Number(
+                                        label="Scale",
+                                        value=1.0,
+                                        precision=3,
+                                        minimum=0.05,
+                                        maximum=8.0,
+                                        step=0.05,
+                                        visible=False,
+                                        scale=1,
+                                        min_width=56,
+                                        elem_classes=["xwave-knob", "xwave-mini"],
+                                    )
+                                    obj_rotation = gr.Number(
+                                        label="Rot°",
+                                        value=0.0,
+                                        precision=1,
+                                        step=1.0,
+                                        visible=False,
+                                        scale=1,
+                                        min_width=52,
+                                        elem_classes=["xwave-knob", "xwave-mini"],
+                                    )
+                                with gr.Row(
+                                    elem_classes=["xwave-xform-strip", "xwave-flip-row", "xwave-obj-xform"]
+                                ):
+                                    obj_flip_x = gr.Checkbox(
+                                        label="Flip H",
+                                        value=False,
+                                        visible=False,
+                                        scale=1,
+                                        min_width=72,
+                                        elem_classes=["xwave-mini-check"],
+                                    )
+                                    obj_flip_y = gr.Checkbox(
+                                        label="Flip V",
+                                        value=False,
+                                        visible=False,
+                                        scale=1,
+                                        min_width=72,
+                                        elem_classes=["xwave-mini-check"],
+                                    )
+                                # Object look: opacity / feather / blend
+                                with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
+                                    insp_opacity = gr.Slider(
+                                        0.0,
+                                        1.0,
+                                        value=1.0,
+                                        step=0.01,
+                                        label="Opacity",
+                                        visible=False,
+                                        scale=1,
+                                        min_width=100,
+                                        elem_classes=["xwave-mini-slider"],
+                                    )
+                                    insp_feather = gr.Slider(
+                                        0.0,
+                                        128.0,
+                                        value=0.0,
+                                        step=1.0,
+                                        label="Feather",
+                                        visible=False,
+                                        scale=1,
+                                        min_width=100,
+                                        elem_classes=["xwave-mini-slider"],
+                                    )
+                                with gr.Row(elem_classes=["xwave-xform-strip", "xwave-obj-xform"]):
+                                    insp_blend = gr.Dropdown(
+                                        choices=BLEND_MODE_LABELS,
+                                        value="Normal",
+                                        label="Blend",
+                                        visible=False,
+                                        scale=1,
+                                        min_width=120,
+                                        elem_classes=["xwave-mini-dd"],
+                                    )
+                                with gr.Row(elem_classes=["xwave-action-row"]):
+                                    mute_prompt_btn = gr.Button(
+                                        "Mute", size="sm", scale=1, min_width=56
+                                    )
+                                    hide_layer_btn = gr.Button(
+                                        "Hide", size="sm", scale=1, min_width=56
+                                    )
+                                    duplicate_btn = gr.Button(
+                                        "Dup", size="sm", scale=1, min_width=48
+                                    )
+                                with gr.Row(elem_classes=["xwave-action-row"]):
+                                    reset_xform_btn = gr.Button(
+                                        "Reset", size="sm", scale=1, min_width=56
+                                    )
+                                    reisolate_btn = gr.Button(
+                                        "Re-cut", size="sm", scale=1, min_width=56
+                                    )
+                                    delete_btn = gr.Button(
+                                        "Delete",
+                                        size="sm",
+                                        variant="stop",
+                                        scale=1,
+                                        min_width=56,
+                                    )
+                                cutout_mode = gr.Radio(
+                                    choices=["rembg", "SAM2", "none"],
+                                    value="rembg",
+                                    show_label=False,
+                                    container=False,
+                                    visible=False,
+                                    elem_classes=["xwave-cutout-mode", "xwave-compact-radio"],
+                                )
+                                raw_view = gr.Image(
+                                    label="Raw — click the subject to re-cut with SAM2",
+                                    type="pil",
+                                    interactive=False,
+                                    visible=False,
+                                    height=140,
+                                    buttons=[],
+                                    elem_classes=["xwave-raw-view"],
+                                )
+                                with gr.Accordion("Import image", open=False):
+                                    import_img = gr.Image(
+                                        type="pil",
+                                        label="Drop or upload",
+                                        height=100,
+                                        buttons=[],
+                                        elem_classes=["xwave-import"],
+                                    )
+                                    import_btn = gr.Button("Import into layer", size="sm")
+
+                            # —— Output style ——
+                            with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
+                                gr.Markdown('<p class="xwave-section-head">Style</p>')
+                                style_family_dd = gr.Dropdown(
+                                    choices=style_family_choices,
+                                    value=FAMILY_ALL,
+                                    label="Family",
+                                    show_label=False,
+                                    container=False,
+                                    filterable=False,
+                                    elem_classes=["xwave-style-family"],
+                                )
+                                style_dd = gr.Dropdown(
+                                    choices=style_names,
+                                    value=NO_STYLE,
+                                    label="Style",
+                                    show_label=False,
+                                    container=False,
+                                    filterable=True,
+                                    elem_classes=["xwave-style-name"],
+                                )
+                                with gr.Row(elem_classes=["xwave-seed-row", "xwave-style-seed"]):
+                                    out_seed = gr.Number(
+                                        value=session.output_settings.seed,
+                                        precision=0,
+                                        show_label=False,
+                                        container=False,
+                                        scale=1,
+                                        min_width=88,
+                                        elem_classes=["xwave-seed", "xwave-style-seed-num"],
+                                    )
+                                    roll_seed_btn = gr.Button(
+                                        "🎲",
+                                        size="sm",
+                                        scale=0,
+                                        min_width=36,
+                                        elem_classes=["xwave-roll-seed"],
+                                    )
+                                with gr.Accordion(
+                                    "Prompt options",
+                                    open=False,
+                                    elem_classes=["xwave-style-opts"],
+                                ):
+                                    concat_dd = gr.Dropdown(
+                                        label="Prompt order",
+                                        choices=list(CONCAT_ORDERS.keys()),
+                                        value="Prefix · Prompts · Suffix",
+                                    )
+                                    manual_chk = gr.Checkbox(
+                                        label="Manual style (own prefix/suffix)", value=False
+                                    )
+                                    manual_prefix = gr.Textbox(
+                                        label="Manual prefix", lines=1, visible=False,
+                                        placeholder="e.g. watercolor illustration of",
+                                    )
+                                    manual_suffix = gr.Textbox(
+                                        label="Manual suffix", lines=1, visible=False,
+                                        placeholder="e.g. soft pastel palette, paper texture",
+                                    )
+                                    neg_prompt = gr.Textbox(
+                                        label="Negative prompt",
+                                        value=session.output_settings.negative_prompt,
+                                        lines=2,
+                                        max_lines=3,
+                                    )
+                                # Concatenation result (always available)
+                                with gr.Group(elem_classes=["xwave-built-prompt"]):
+                                    with gr.Row():
+                                        use_llm = gr.Checkbox(
+                                            label="LLM rewrite", value=False, scale=1,
+                                        )
+                                        prompt_lock = gr.Checkbox(
+                                            label="Edit built prompt (lock auto-build)",
+                                            value=False,
+                                            scale=1,
+                                        )
+                                    prompt_view = gr.Textbox(
+                                        label="Built prompt",
+                                        lines=2,
+                                        max_lines=4,
+                                        interactive=False,
+                                    )
+                                # Shown when LLM rewrite is on — the rewritten prompt, optionally editable
+                                llm_prompt_lock = gr.Checkbox(
+                                    label="Edit LLM prompt (lock rewrite)",
+                                    value=False,
+                                    visible=False,
+                                )
+                                llm_prompt_view = gr.Textbox(
+                                    label="LLM rewritten prompt",
+                                    lines=3,
+                                    max_lines=6,
+                                    interactive=False,
+                                    visible=False,
+                                    placeholder="Enable LLM rewrite to generate…",
+                                )
+
+                            # —— Model + export ——
+                            with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
+                                gr.Markdown('<p class="xwave-section-head">Output model</p>')
+                                with gr.Row():
+                                    base_dd = gr.Dropdown(
+                                        choices=base_names,
+                                        value=default_base_name,
+                                        show_label=False,
+                                        container=False,
+                                        scale=2,
+                                    )
+                                    base_btn = gr.Button("Load", size="sm", scale=0, min_width=64)
+                                base_custom = gr.Textbox(
+                                    show_label=False,
+                                    container=False,
+                                    placeholder="…or HF repo id / CivitAI .safetensors link",
+                                    lines=1,
+                                )
+                                performance_dd = gr.Dropdown(
+                                    label="Performance",
+                                    choices=PROFILE_CHOICES,
+                                    value=profile_label(session.compute_profile),
+                                )
+                                performance_status = gr.Textbox(
+                                    label="Applied compute",
+                                    value=session.optimization_status(),
+                                    interactive=False,
+                                    lines=2,
+                                    max_lines=3,
+                                )
+                                with gr.Accordion("Style adapters (LoRA / TI)", open=False):
+                                    lora_path = gr.Textbox(label="LoRA path or HF id", lines=1)
+                                    lora_scale = gr.Slider(0, 1.5, value=0.8, step=0.05, label="LoRA scale")
+                                    load_lora_btn = gr.Button("Load LoRA", size="sm")
+                                    emb_path = gr.Textbox(label="Textual inversion path or id", lines=1)
+                                    load_emb_btn = gr.Button("Load TI", size="sm")
+                                gr.Markdown('<p class="xwave-section-head">Final output</p>')
+                                with gr.Row():
+                                    final_refine_strength = gr.Slider(
+                                        0.05,
+                                        0.95,
+                                        value=float(
+                                            config.get(
+                                                "export",
+                                                "default_refine_strength",
+                                                default=0.3,
+                                            )
+                                        ),
+                                        step=0.01,
+                                        label="Refine strength",
+                                        scale=2,
+                                    )
+                                    final_refine_steps = gr.Slider(
+                                        1,
+                                        40,
+                                        value=int(
+                                            config.get(
+                                                "export",
+                                                "default_refine_steps",
+                                                default=8,
+                                            )
+                                        ),
+                                        step=1,
+                                        label="Refine steps",
+                                        scale=2,
+                                    )
+                                with gr.Row():
+                                    update_output_btn = gr.Button(
+                                        "Update OUTPUT now", size="sm",
+                                    )
+                                    refine_output_btn = gr.Button(
+                                        "Refine OUTPUT", variant="secondary", size="sm",
+                                    )
+                                with gr.Accordion("SeedVR2 export settings", open=False):
+                                    seedvr_preset = gr.Dropdown(
+                                        label="Preset",
+                                        choices=SEEDVR2_PRESET_CHOICES,
+                                        value="quality",
+                                    )
+                                    seedvr_model = gr.Dropdown(
+                                        label="Model",
+                                        choices=SEEDVR2_MODEL_CHOICES,
+                                        value=config.get(
+                                            "export",
+                                            "seedvr2_model",
+                                            default=DEFAULT_SEEDVR2_MODEL,
+                                        ),
+                                    )
+                                    seedvr_color = gr.Dropdown(
+                                        label="Color fidelity",
+                                        choices=["lab", "wavelet", "wavelet_adaptive", "none"],
+                                        value=config.get(
+                                            "export",
+                                            "seedvr2_color_correction",
+                                            default="lab",
+                                        ),
+                                    )
+                                    with gr.Row():
+                                        seedvr_input_noise = gr.Slider(
+                                            0.0,
+                                            0.3,
+                                            value=float(
+                                                config.get(
+                                                    "export",
+                                                    "seedvr2_input_noise_scale",
+                                                    default=0.0,
+                                                )
+                                            ),
+                                            step=0.01,
+                                            label="Artifact reduction",
+                                        )
+                                        seedvr_latent_noise = gr.Slider(
+                                            0.0,
+                                            0.2,
+                                            value=float(
+                                                config.get(
+                                                    "export",
+                                                    "seedvr2_latent_noise_scale",
+                                                    default=0.0,
+                                                )
+                                            ),
+                                            step=0.01,
+                                            label="Detail softness",
+                                        )
+                                    seedvr_seed = gr.Number(
+                                        label="Seed",
+                                        value=int(
+                                            config.get(
+                                                "export",
+                                                "seedvr2_seed",
+                                                default=42,
+                                            )
+                                        ),
+                                        precision=0,
+                                    )
+                                    with gr.Accordion("Advanced — VRAM / speed", open=False):
+                                        seedvr_blocks = gr.Slider(
+                                            0,
+                                            36,
+                                            value=int(
+                                                config.get(
+                                                    "export",
+                                                    "seedvr2_blocks_to_swap",
+                                                    default=0,
+                                                )
+                                            ),
+                                            step=1,
+                                            label="BlockSwap (0 = off)",
+                                            info="Offloads DiT blocks to CPU. Auto-sets offload=cpu when > 0.",
+                                        )
+                                        seedvr_swap_io = gr.Checkbox(
+                                            label="Swap I/O components",
+                                            value=bool(
+                                                config.get(
+                                                    "export",
+                                                    "seedvr2_swap_io_components",
+                                                    default=False,
+                                                )
+                                            ),
+                                        )
+                                        with gr.Row():
+                                            seedvr_dit_offload = gr.Dropdown(
+                                                label="DiT offload",
+                                                choices=["none", "cpu"],
+                                                value=str(
+                                                    config.get(
+                                                        "export",
+                                                        "seedvr2_dit_offload_device",
+                                                        default="none",
+                                                    )
+                                                ),
+                                            )
+                                            seedvr_vae_offload = gr.Dropdown(
+                                                label="VAE offload",
+                                                choices=["none", "cpu"],
+                                                value=str(
+                                                    config.get(
+                                                        "export",
+                                                        "seedvr2_vae_offload_device",
+                                                        default="none",
+                                                    )
+                                                ),
+                                            )
+                                        seedvr_compile = gr.Checkbox(
+                                            label="Compile DiT (torch.compile)",
+                                            value=bool(
+                                                config.get(
+                                                    "export",
+                                                    "seedvr2_compile_dit",
+                                                    default=False,
+                                                )
+                                            ),
+                                            info="Faster later exports; first run pays compile cost.",
+                                        )
+                                export_btn = gr.Button(
+                                    "Export accepted OUTPUT 2× with SeedVR2",
+                                    variant="primary",
+                                    size="sm",
+                                    elem_classes=["xwave-export-btn"],
+                                )
+                                export_path = gr.Textbox(
+                                    label="Export path", interactive=False, lines=1
+                                )
+                                export_image = gr.Image(
+                                    label="Export preview",
+                                    type="filepath",
+                                    format="jpeg",
+                                    interactive=False,
+                                    height=140,
+                                    buttons=["download"],
+                                )
+                                with gr.Accordion(
+                                    "Export Style Flipbook",
+                                    open=False,
+                                    elem_classes=["xwave-flipbook"],
+                                ):
+                                    style_preset_count = (
+                                        len(session.styles.names()) if session.styles else 0
+                                    )
+                                    flipbook_mode = gr.Radio(
+                                        choices=["Styles", "Seeds"],
+                                        value="Styles",
+                                        label="Mode",
+                                        elem_classes=["xwave-flipbook-mode"],
+                                    )
+                                    flipbook_families = gr.CheckboxGroup(
+                                        choices=flipbook_family_choices,
+                                        value=list(flipbook_family_choices),
+                                        label="Families",
+                                        elem_classes=["xwave-flipbook-families"],
+                                    )
+                                    flipbook_count = gr.Number(
+                                        label="Styles (0 = all in checked families)",
+                                        value=min(32, style_preset_count) if style_preset_count else 32,
+                                        precision=0,
+                                        minimum=0,
+                                        maximum=max(style_preset_count, 1),
+                                    )
+                                    flipbook_fps = gr.Radio(
+                                        choices=[24, 30, 48, 60],
+                                        value=30,
+                                        label="FPS",
+                                    )
+                                    flipbook_hold = gr.Number(
+                                        label="Frames per image",
+                                        value=8,
+                                        precision=0,
+                                        minimum=1,
+                                        maximum=120,
+                                    )
+                                    flipbook_seed_mode = gr.State(value="lock")
+                                    with gr.Row(elem_classes=["xwave-flipbook-seed"]):
+                                        flipbook_lock_btn = gr.Button(
+                                            "🔒",
+                                            size="sm",
+                                            scale=0,
+                                            min_width=36,
+                                            variant="primary",
+                                            elem_classes=["xwave-flipbook-lock"],
+                                        )
+                                        flipbook_dice_btn = gr.Button(
+                                            "🎲",
+                                            size="sm",
+                                            scale=0,
+                                            min_width=36,
+                                            variant="secondary",
+                                            elem_classes=["xwave-flipbook-dice"],
+                                        )
+                                        flipbook_seed_hint = gr.Markdown(
+                                            '<p class="xwave-flipbook-seed-hint">'
+                                            "🔒 same seed · 🎲 new seed per style</p>"
+                                        )
+                                    flipbook_btn = gr.Button(
+                                        "Run style flipbook",
+                                        variant="primary",
+                                        size="sm",
+                                        elem_classes=["xwave-flipbook-run"],
+                                    )
+                                    flipbook_path = gr.Textbox(
+                                        label="Flipbook path",
+                                        interactive=False,
+                                        lines=1,
+                                    )
+                                    flipbook_video = gr.Video(
+                                        label="Flipbook preview",
+                                        interactive=False,
+                                        height=160,
+                                    )
+
+
+            with gr.Tab("Infinite Canvas", elem_id="xwave-infinite-canvas-tab"):
+                _lc_ui = build_large_canvas_tab(
+                    sdxl=session.sdxl,
+                    styles=session.styles,
+                    config=config,
+                    infer_lock=infer_lock,
+                    upscaler=session.upscaler,
+                    free_vram_fn=session.enter_infinite_canvas_mode,
+                )
+                demo._xwave_large_canvas = _lc_ui  # type: ignore[attr-defined]
+                lc_status = _lc_ui["status"]
         # ── Callbacks ───────────────────────────────────────────
         pack_out = [
             work_html,
@@ -1456,6 +1586,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             prompt_view,
             llm_prompt_view,
             mute_prompt_btn,
+            hide_layer_btn,
             cutout_chk,
             cutout_mode,
             obj_scale,
@@ -1482,12 +1613,34 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             s.seed = int(oseed)
 
         def on_load():
-            msg = session.preload_core()
+            with infer_lock:
+                session.enter_compose_mode()
+                msg = session.preload_core()
             flush_pending_output()
             return msg
 
         def on_free():
-            return session.free_optional()
+            with infer_lock:
+                return session.free_optional()
+
+        def on_main_tab(evt: gr.SelectData):
+            """Exclusive mode: Compose ↔ Infinite Canvas never share the GPU stack."""
+            label = str(getattr(evt, "value", "") or "")
+            idx = int(getattr(evt, "index", 0) or 0)
+            want_ic = idx == 1 or "infinite" in label.lower()
+            with infer_lock:
+                if want_ic:
+                    with out_lock:
+                        remember = bool(out_state["dirty"] or out_state["pending"])
+                        out_state["token"] += 1
+                        out_state["dirty"] = False
+                        out_state["running"] = False
+                        out_state["pending"] = remember
+                    msg = session.enter_infinite_canvas_mode()
+                    return msg, msg
+                msg = session.enter_compose_mode()
+            flush_pending_output()
+            return msg, msg
 
         def on_action(payload, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1535,8 +1688,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 # current tabs send false while dragging and true on release.
                 if final is True:
                     # Keep the WORK canvas on the optimistic local pose.
-                    # Kick OUTPUT asynchronously instead of blocking this
-                    # event on SDXL (which made the UI feel laggy/jumpy).
+                    # Kick one full-quality OUTPUT refine after release.
                     # Do not write output_image here — a late pack with the
                     # pre-refine JPEG can clobber a fresher poll_output and
                     # leave rev_state stuck until the next move.
@@ -1551,7 +1703,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 if final is None:
                     # Legacy browser assets emit every 120 ms and do not label
                     # pointer-up. A longer debounce collapses the stream into
-                    # one render after movement stops.
+                    # one full refine after movement stops.
                     mark_output_dirty(delay_override=0.8)
                 # Live events update server state only — never rewrite the scene.
                 return tuple(gr.update() for _ in pack_out)
@@ -1590,6 +1742,22 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
             session.add_empty_object()
             return pack(run_out=False)
+
+        def on_roll_all(den, steps, cfg_v, eta_v, llm, neg, oseed):
+            apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
+            try:
+                session.roll_all()
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Roll all failed")
+                session.status = f"Roll all failed: {exc}"
+                packed = pack(run_out=False)
+                return (*packed, int(session.output_settings.seed))
+            # WORK already updated; OUTPUT was refined inside roll_all.
+            with out_lock:
+                out_state["dirty"] = False
+                out_state["token"] += 1
+            packed = pack(run_out=False, sync_out=False, include_output=True)
+            return (*packed, int(session.output_settings.seed))
 
         # When True, the chained generate follow-up should refine OUTPUT.
         # Cleared on failure / empty prompt so we don't re-refine a stale pose.
@@ -1908,6 +2076,15 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             # WORK pixels are unchanged.
             return pack_output_only(include_layers=True)
 
+        def on_hide_layer(den, steps, cfg_v, eta_v, llm, neg, oseed):
+            apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
+            if session.doc.selected_id in (None, "__bg__"):
+                session.status = "Select an object layer to hide or show."
+                return pack(run_out=False)
+            session.toggle_selected_visibility()
+            # Pixels leave/return on WORK and OUTPUT; prompt concat unchanged.
+            return pack_work_then_output()
+
         def on_reset_workspace():
             with out_lock:
                 out_state["dirty"] = False
@@ -2078,10 +2255,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
         def on_final_refine(strength, steps):
             try:
-                session.refine_final(
-                    steps=int(steps),
-                    denoise=float(strength),
-                )
+                with infer_lock:
+                    session.refine_final(
+                        steps=int(steps),
+                        denoise=float(strength),
+                    )
                 return pack(run_out=False)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Final refine failed")
@@ -2119,20 +2297,21 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 out_state["dirty"] = False
                 out_state["token"] += 1
             try:
-                _img, path = session.export_final(
-                    seedvr2_options={
-                        "model": str(model),
-                        "color_correction": str(color),
-                        "input_noise_scale": float(input_noise),
-                        "latent_noise_scale": float(latent_noise),
-                        "seed": int(seed),
-                        "blocks_to_swap": int(blocks),
-                        "swap_io_components": bool(swap_io),
-                        "dit_offload_device": str(dit_offload),
-                        "vae_offload_device": str(vae_offload),
-                        "compile_dit": bool(compile_dit),
-                    }
-                )
+                with infer_lock:
+                    _img, path = session.export_final(
+                        seedvr2_options={
+                            "model": str(model),
+                            "color_correction": str(color),
+                            "input_noise_scale": float(input_noise),
+                            "latent_noise_scale": float(latent_noise),
+                            "seed": int(seed),
+                            "blocks_to_swap": int(blocks),
+                            "swap_io_components": bool(swap_io),
+                            "dit_offload_device": str(dit_offload),
+                            "vae_offload_device": str(vae_offload),
+                            "compile_dit": bool(compile_dit),
+                        }
+                    )
                 flush_pending_output()
                 return str(path), str(path), session.status
             except Exception as exc:  # noqa: BLE001
@@ -2179,10 +2358,23 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         free_btn.click(on_free, outputs=[status]).then(
             render_vram_html, outputs=[vram_html], show_progress="hidden"
         )
+        main_tabs.select(
+            on_main_tab,
+            outputs=[status, lc_status],
+            show_progress="hidden",
+        ).then(
+            render_vram_html, outputs=[vram_html], show_progress="hidden"
+        )
         action_out.change(
             on_action, inputs=[action_out, *settings_in], outputs=pack_out, show_progress="hidden"
         )
         add_obj_btn.click(on_add_layer, inputs=settings_in, outputs=pack_out, show_progress="hidden")
+        roll_all_btn.click(
+            on_roll_all,
+            inputs=settings_in,
+            outputs=[*pack_out, out_seed],
+            show_progress="full",
+        )
         reset_workspace_btn.click(
             on_reset_workspace,
             outputs=[
@@ -2205,6 +2397,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         )
         mute_prompt_btn.click(
             on_mute_prompt, inputs=settings_in, outputs=pack_out, show_progress="hidden"
+        )
+        hide_layer_btn.click(
+            on_hide_layer, inputs=settings_in, outputs=pack_out, show_progress="hidden"
         )
         duplicate_btn.click(
             on_duplicate, inputs=settings_in, outputs=pack_out, show_progress="hidden"
@@ -2413,6 +2608,25 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 outputs=[status, bf16_btn, mxfp8_btn, nvfp4_btn],
                 show_progress="hidden",
             )
+
+        def on_quality_mode(mode: str):
+            s = session.apply_quality_mode(mode)
+            key = normalize_quality_mode(mode)
+            packed = pack_output_only()
+            return (
+                gr.update(variant="primary" if key == "fast" else "secondary"),
+                gr.update(variant="primary" if key == "quality" else "secondary"),
+                s.denoise,
+                s.steps,
+                *packed,
+            )
+
+        for button, mode in ((fast_btn, "fast"), (quality_btn, "quality")):
+            button.click(
+                partial(on_quality_mode, mode),
+                outputs=[fast_btn, quality_btn, denoise, out_steps, *pack_out],
+                show_progress="hidden",
+            )
         load_lora_btn.click(on_lora, inputs=[lora_path, lora_scale], outputs=[status])
         load_emb_btn.click(on_emb, inputs=[emb_path], outputs=[status])
         update_output_btn.click(
@@ -2508,14 +2722,15 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             )
 
         def on_flipbook(mode, count, fps, hold, seed_mode, fams):
-            path, msg = session.export_style_flipbook(
-                style_count=int(count or 0),
-                fps=int(fps or 30),
-                frames_per_image=int(hold or 8),
-                lock_seed=(str(seed_mode or "lock") != "random"),
-                families=list(fams or []),
-                mode=str(mode or "styles"),
-            )
+            with infer_lock:
+                path, msg = session.export_style_flipbook(
+                    style_count=int(count or 0),
+                    fps=int(fps or 30),
+                    frames_per_image=int(hold or 8),
+                    lock_seed=(str(seed_mode or "lock") != "random"),
+                    families=list(fams or []),
+                    mode=str(mode or "styles"),
+                )
             video = str(path) if path is not None else None
             out_path = str(path) if path is not None else ""
             return video, out_path, msg
@@ -2586,6 +2801,22 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         def _init():
             return render_work_html(_scene_dict(session)), render_layers_html(session)
 
+        def on_work_grid(grid_type, grid_color):
+            return _work_grid_state_html(grid_type, grid_color, user_set=True)
+
+        work_grid_type.change(
+            on_work_grid,
+            inputs=[work_grid_type, work_grid_color],
+            outputs=[work_grid_state],
+            show_progress="hidden",
+        )
+        work_grid_color.change(
+            on_work_grid,
+            inputs=[work_grid_type, work_grid_color],
+            outputs=[work_grid_state],
+            show_progress="hidden",
+        )
+
         demo.load(_init, outputs=[work_html, layers_html])
 
     return demo
@@ -2602,11 +2833,17 @@ def _launch_kwargs(demo: gr.Blocks, config: AppConfig) -> dict:
     workspace = config.path("paths", "workspace_dir", default="workspace").resolve()
     layers = config.path("paths", "layers_dir", default="workspace/layers").resolve()
     scene_cache = _scene_cache_dir(config)
+    lc_cache = (workspace / "large_canvas_cache").resolve()
+    lc_cache.mkdir(parents=True, exist_ok=True)
+    exports = config.path("export", "output_dir", default="exports").resolve()
+    exports.mkdir(parents=True, exist_ok=True)
     _OUTPUT_JPEG_DIR.mkdir(parents=True, exist_ok=True)
     kwargs["allowed_paths"] = [
         str(workspace),
         str(layers),
         str(scene_cache),
+        str(lc_cache),
+        str(exports),
         str(_OUTPUT_JPEG_DIR.resolve()),
     ]
     theme = getattr(demo, "_xwave_theme", None)

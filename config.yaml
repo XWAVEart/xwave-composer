@@ -7,9 +7,9 @@ dtype: "bfloat16"   # bfloat16 recommended on RTX 5090
 # --- RTX 5090 / Blackwell compute profile ---
 optimization:
   # bf16 | mxfp8 | nvfp4
-  # MXFP8 is the quality-focused default. NVFP4 saves more Flux VRAM but can
-  # produce a larger visual delta from BF16.
-  profile: "mxfp8"
+  # MXFP8 is the quality-focused default. NVFP4 saves more VRAM (preferred for
+  # Infinite Canvas + Compose exclusivity on 32 GB).
+  profile: "nvfp4"
   compile: true
   # CUDA-graph modes currently overwrite reused FLUX.2 block outputs.
   compile_mode: "default"
@@ -42,18 +42,40 @@ sdxl_hyper:
   # Default base. The UI base-model menu can swap this at runtime
   # (DreamShaper XL, Juggernaut XL, epiCRealism XL, RealVisXL V5, or any
   # HF repo id / CivitAI .safetensors download link).
-  base_model_id: "stabilityai/stable-diffusion-xl-base-1.0"
+  base_model_id: "RunDiffusion/Juggernaut-XL-v9"
   # ByteDance Hyper-SD LoRA for few-step SDXL (1–8 steps typical).
   hyper_lora_id: "ByteDance/Hyper-SD"
   hyper_lora_weight_name: "Hyper-SDXL-8steps-lora.safetensors"
   # Alternative single-file / UNet checkpoints can be set here.
   unet_id: null
-  default_denoise: 0.3
-  default_steps: 6
+  # Fast / Quality packs for the top-bar toggle. Values are easy to retune.
+  # Diffusers img2img runs int(steps * denoise) real denoising steps, so
+  # Fast 0.30×6 ≈ 1 step (snappy, more "pasted") and Quality 0.55×10 ≈ 5
+  # steps (objects pick up scene light / contact).
+  default_quality_mode: "quality"
+  quality_modes:
+    fast:
+      denoise: 0.30
+      steps: 6
+      preview_steps: 4
+    quality:
+      denoise: 0.55
+      steps: 10
+      preview_steps: 6
+  # Startup defaults follow default_quality_mode (Quality pack).
+  default_denoise: 0.55
+  default_steps: 10
   guidance_scale: 1.0
   keep_loaded: true
   # Debounce (seconds) before live OUTPUT refresh after transform.
   live_debounce_s: 0.10
+  # Interactive OUTPUT: on drag release, run a fewer-step preview at full
+  # canvas size, then settle to the mode's full step count after movement
+  # stops. Keep preview_scale at 1.0 — downscaling the init image makes the
+  # settle pass look like a different composition, not a sharper version.
+  # Export / Refine / Flipbook force a full (non-preview) pass first.
+  preview_scale: 1.0
+  settle_debounce_s: 1.2
 
 # --- Object isolation ---
 isolation:

@@ -78,10 +78,25 @@ class ObjectLayer:
     raw_image: Image.Image | None = None
     transform: LayerTransform = field(default_factory=LayerTransform)
     path: Path | None = None
+    # "generated" (Flux) or "imported" (user upload). Imports are skipped by Roll all.
+    source: str = "generated"
+    # How the layer was last generated/imported (cutout vs full image).
+    cutout: bool = True
+    # If set, this layer is a duplicate of that origin id (Roll all re-rolls
+    # the origin once, then copies pixels onto each duplicate).
+    origin_id: str | None = None
 
     def label(self) -> str:
         short = (self.prompt[:40] + "…") if len(self.prompt) > 40 else self.prompt
         return f"{self.name} [{self.id}] {short}".strip()
+
+    @property
+    def is_imported(self) -> bool:
+        return str(self.source or "").strip().lower() == "imported"
+
+    @property
+    def is_duplicate(self) -> bool:
+        return bool(self.origin_id) and self.origin_id != self.id
 
 
 @dataclass
@@ -92,6 +107,8 @@ class WorkDocument:
     height: int = 1024
     background: Image.Image | None = None
     background_prompt: str = ""
+    # "generated" or "imported" — imports are skipped by Roll all.
+    background_source: str = "generated"
     # Background placement on the canvas (center-anchored). Scale 1.0 matches
     # the previous fill-to-canvas size; flip/rotation apply around center.
     bg_scale: float = 1.0

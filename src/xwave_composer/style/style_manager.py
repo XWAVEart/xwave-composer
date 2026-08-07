@@ -205,38 +205,32 @@ class StyleManager:
         return self.get(self.active_name)
 
 
-def build_output_prompt(
-    doc: "WorkDocument",
-    preset: StylePreset | None,
+# UI labels → internal order keys (Compose + Infinite Canvas).
+CONCAT_ORDERS: dict[str, str] = {
+    "Prefix · Prompts · Suffix": "pcs",
+    "Prefix · Suffix · Prompts": "psc",
+    "Prompts · Prefix · Suffix": "cps",
+    "Suffix · Prefix · Prompts": "spc",
+}
+
+
+def assemble_style_prompt(
+    content: str,
+    prefix: str,
+    suffix: str,
     order: str = "pcs",
-    manual_prefix: str | None = None,
-    manual_suffix: str | None = None,
 ) -> str:
-    """Build the OUTPUT prompt from style prefix/suffix + layer prompts.
+    """Combine user content with style prefix/suffix using a concat order.
 
-    order="pcs" (default): prefix is fused into the user prompts with a space
+    order="pcs" (default): prefix is fused into the user text with a space
     (no comma), then ", " + suffix — matching the CSV style sheets.
-    order="psc": prefix, suffix, then user prompts — comma-separated.
-    order="cps": user prompts, prefix, suffix — comma-separated.
-    order="spc": suffix, prefix, then user prompts — comma-separated.
+    order="psc": prefix, suffix, then content — comma-separated.
+    order="cps": content, prefix, suffix — comma-separated.
+    order="spc": suffix, prefix, then content — comma-separated.
     """
-    parts: list[str] = []
-    if doc.background_prompt.strip():
-        parts.append(doc.background_prompt.strip())
-    for obj in doc.objects:
-        if obj.prompt_enabled and obj.prompt.strip():
-            parts.append(obj.prompt.strip())
-    content = ", ".join(parts)
-
-    if manual_prefix is not None or manual_suffix is not None:
-        prefix = _clean(manual_prefix or "")
-        suffix = _clean(manual_suffix or "")
-    elif preset is not None:
-        prefix = _clean(preset.prefix)
-        suffix = _clean(preset.suffix)
-    else:
-        return content
-
+    content = (content or "").strip()
+    prefix = _clean(prefix)
+    suffix = _clean(suffix)
     if order == "psc":
         pieces = [p for p in (prefix, suffix, content) if p]
         return ", ".join(pieces)
@@ -255,3 +249,31 @@ def build_output_prompt(
     if suffix:
         return f"{lead}, {suffix}" if lead else suffix
     return lead
+
+
+def build_output_prompt(
+    doc: "WorkDocument",
+    preset: StylePreset | None,
+    order: str = "pcs",
+    manual_prefix: str | None = None,
+    manual_suffix: str | None = None,
+) -> str:
+    """Build the OUTPUT prompt from style prefix/suffix + layer prompts."""
+    parts: list[str] = []
+    if doc.background_prompt.strip():
+        parts.append(doc.background_prompt.strip())
+    for obj in doc.objects:
+        if obj.prompt_enabled and obj.prompt.strip():
+            parts.append(obj.prompt.strip())
+    content = ", ".join(parts)
+
+    if manual_prefix is not None or manual_suffix is not None:
+        prefix = manual_prefix or ""
+        suffix = manual_suffix or ""
+    elif preset is not None:
+        prefix = preset.prefix
+        suffix = preset.suffix
+    else:
+        return content
+
+    return assemble_style_prompt(content, prefix, suffix, order=order)

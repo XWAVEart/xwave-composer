@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from PIL import Image
 
@@ -20,6 +21,7 @@ from xwave_composer.optimization import (
     OptimizationReport,
     compile_component,
     configured_profile,
+    make_nvfp4_linear_inputs_contiguous,
     normalize_profile,
     profile_label,
     quantize_component,
@@ -180,7 +182,7 @@ class SDXLHyperPipeline:
         base_id = str(
             base_ref
             or self.config.get(
-                "sdxl_hyper", "base_model_id", default="stabilityai/stable-diffusion-xl-base-1.0"
+                "sdxl_hyper", "base_model_id", default="RunDiffusion/Juggernaut-XL-v9"
             )
         )
         hyper_lora_id = self.config.get("sdxl_hyper", "hyper_lora_id", default=None)
@@ -212,6 +214,11 @@ class SDXLHyperPipeline:
         if hasattr(pipe, "enable_vae_tiling"):
             try:
                 pipe.enable_vae_tiling()
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(pipe, "enable_vae_slicing"):
+            try:
+                pipe.enable_vae_slicing()
             except Exception:  # noqa: BLE001
                 pass
         loaded_loras: list[str] = []
@@ -252,6 +259,8 @@ class SDXLHyperPipeline:
                 requested=self.profile,
                 fallback_reason=reason,
             )
+        if report.applied == "nvfp4":
+            make_nvfp4_linear_inputs_contiguous(pipe.unet)
         report = compile_component(pipe.unet, report, self.config)
         self.optimization_report = report
         self.loaded_loras.extend(loaded_loras)
@@ -347,6 +356,60 @@ class SDXLHyperPipeline:
             self._embedding_specs.append(spec)
         return f"Textual inversion loaded: {path_or_id}"
 
+    def _prepare_diffdiff_noise(
+        self,
+        init_image: Image.Image,
+        steps: int,
+        generator: torch.Generator | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        """Encode init + shared noise for Differential Diffusion (lazy re-noise).
+
+        Returns ``(init_latents, noise, timesteps, num_steps)``. The callback
+        re-noises ``z0`` per step instead of stacking all noise levels on GPU
+        (which OOMs on large dilated Infinite Canvas windows).
+        """
+        from diffusers.utils.torch_utils import randn_tensor
+
+        pipe = self.pipe
+        assert pipe is not None
+        device = pipe._execution_device
+        try:
+            dtype = next(pipe.unet.parameters()).dtype
+        except StopIteration:
+            dtype = self.dtype
+
+        empty_cache()
+
+        # Scheduler timesteps for full-strength (strength=1) img2img.
+        pipe.scheduler.set_timesteps(steps, device=device)
+        timesteps, num_steps = pipe.get_timesteps(
+            num_inference_steps=steps, strength=1.0, device=device
+        )
+        num_steps = int(num_steps)
+        if num_steps <= 0:
+            raise RuntimeError("Differential Diffusion: empty timestep schedule")
+
+        image = pipe.image_processor.preprocess(init_image)
+        image = image.to(device=device, dtype=dtype)
+        # Encode once without noise; pin reference is re-derived per step.
+        init_latents = pipe.prepare_latents(
+            image,
+            timesteps[:1],
+            batch_size=1,
+            num_images_per_prompt=1,
+            dtype=dtype,
+            device=device,
+            generator=generator,
+            add_noise=False,
+        )
+        del image
+        empty_cache()
+
+        noise = randn_tensor(
+            init_latents.shape, generator=generator, device=device, dtype=init_latents.dtype
+        )
+        return init_latents, noise, timesteps, num_steps
+
     def refine(
         self,
         init_image: Image.Image,
@@ -357,8 +420,14 @@ class SDXLHyperPipeline:
         seed: int | None = None,
         guidance_scale: float | None = None,
         eta: float | None = None,
+        change_map: Image.Image | None = None,
     ) -> Image.Image:
-        """Run img2img refinement. init_image is the composed WORK canvas."""
+        """Run img2img refinement. init_image is the composed WORK canvas.
+
+        Optional ``change_map`` (L mode, 0..255): Differential Diffusion soft-inpaint.
+        White = rewrite strongly; black = keep. Soft gray edges = seamless blend.
+        When set, global strength is forced to 1.0 and the map drives per-pixel strength.
+        """
         self.ensure_loaded()
         assert self.pipe is not None
 
@@ -383,10 +452,19 @@ class SDXLHyperPipeline:
         if seed is not None and seed >= 0:
             generator = torch.Generator(device=self.device).manual_seed(int(seed))
 
+        use_diff = change_map is not None
+        strength = 1.0 if use_diff else max(0.01, min(1.0, denoise))
+        # Few-step Hyper still works better with a little headroom for soft maps.
+        if use_diff:
+            steps = max(steps, 8)
+            # Note: do NOT torch.compiler.reset() here — that forces a full
+            # UNet recompile on every call. Mode switches handle pool cleanup.
+            empty_cache()
+
         call_kwargs: dict[str, Any] = {
             "prompt": prompt,
             "image": init,
-            "strength": max(0.01, min(1.0, denoise)),
+            "strength": strength,
             "num_inference_steps": max(1, steps),
             "guidance_scale": guidance,
             "generator": generator,
@@ -397,6 +475,41 @@ class SDXLHyperPipeline:
         if negative_prompt:
             call_kwargs["negative_prompt"] = negative_prompt
 
+        if use_diff:
+            from xwave_composer.pipeline.infinite_canvas.strength import to_latent_strength
+
+            cmap = change_map.convert("L")
+            if cmap.size != init.size:
+                cmap = cmap.resize(init.size, Image.Resampling.BILINEAR)
+            z0, noise, timesteps_dd, num_steps = self._prepare_diffdiff_noise(
+                init, max(1, steps), generator
+            )
+            # Area-downsample strength to latent res (VAE pooling analogue).
+            strength_px = np.asarray(cmap, dtype=np.float32) / 255.0
+            vae_scale = int(getattr(self.pipe, "vae_scale_factor", 8))
+            map_np = to_latent_strength(strength_px, scale=vae_scale)
+            map_t = torch.from_numpy(map_np)[None, None].to(
+                device=z0.device, dtype=z0.dtype
+            )
+            # Research §4.2: thresh descends 1→0; high strength released first.
+            # active keeps denoising trajectory; inactive pinned to re-noised z0.
+
+            def _diff_callback(pipe, step_index, timestep, callback_kwargs):  # noqa: ARG001
+                latents = callback_kwargs["latents"]
+                next_i = int(step_index) + 1
+                if next_i < num_steps:
+                    thresh = 1.0 - (next_i / float(num_steps))
+                    active = (map_t > thresh).to(dtype=latents.dtype)
+                    t_ref = timesteps_dd[next_i]
+                    t_batch = t_ref.expand(z0.shape[0])
+                    z_ref = pipe.scheduler.add_noise(z0, noise, t_batch)
+                    latents = active * latents + (1.0 - active) * z_ref
+                    callback_kwargs["latents"] = latents
+                return callback_kwargs
+
+            call_kwargs["callback_on_step_end"] = _diff_callback
+            call_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
+
         if self.optimization_report.compiled:
             try:
                 torch.compiler.cudagraph_mark_step_begin()
@@ -406,12 +519,22 @@ class SDXLHyperPipeline:
             try:
                 result = self.pipe(**call_kwargs)
             except TypeError:
-                # Older signatures
+                # Older signatures / no callback support — fall back without diff.
+                if use_diff:
+                    logger.warning(
+                        "Pipeline rejected Differential Diffusion callback; "
+                        "falling back to global strength img2img"
+                    )
+                    call_kwargs.pop("callback_on_step_end", None)
+                    call_kwargs.pop("callback_on_step_end_tensor_inputs", None)
                 result = self.pipe(
                     prompt=prompt,
                     image=init,
-                    strength=max(0.01, min(1.0, denoise)),
+                    strength=strength,
                     num_inference_steps=max(1, steps),
+                    guidance_scale=guidance,
+                    generator=generator,
+                    **({"negative_prompt": negative_prompt} if negative_prompt else {}),
                 )
 
         out = result.images[0]

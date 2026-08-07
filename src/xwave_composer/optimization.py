@@ -207,17 +207,17 @@ def quantize_component(
     try:
         from torchao.quantization import Float8WeightOnlyConfig, quantize_
 
-        if component == "sdxl":
-            # SDXL is convolution-heavy and supports hot-loaded LoRAs. Keep its
-            # linear path trainable/adapter-compatible instead of applying FP4.
-            quant_config: Any = Float8WeightOnlyConfig()
-            applied = "fp8-weight-only"
-            require_divisible_16 = False
-        elif profile == "nvfp4":
+        if profile == "nvfp4":
             from torchao.prototype.mx_formats.inference_workflow import (
                 NVFP4DynamicActivationNVFP4WeightConfig,
             )
 
+            # Adapters are loaded and fused before this function runs. Applying
+            # FP8 unconditionally to SDXL made the "NVFP4 Maximum" selection a
+            # false label and left its attention/FFN linears at twice the
+            # requested weight precision. Optional LoRAs already rebuild the
+            # pipeline before quantization, so SDXL can use the same real
+            # Blackwell FP4 recipe as Flux.
             quant_config = NVFP4DynamicActivationNVFP4WeightConfig(
                 use_dynamic_per_tensor_scale=True,
                 use_triton_kernel=bool(
@@ -226,6 +226,12 @@ def quantize_component(
             )
             applied = "nvfp4"
             require_divisible_16 = True
+        elif component == "sdxl":
+            # Keep the balanced SDXL recipe weight-only so optional adapters
+            # remain cheap to rebuild and quantize.
+            quant_config = Float8WeightOnlyConfig()
+            applied = "fp8-weight-only"
+            require_divisible_16 = False
         else:
             from torchao.prototype.mx_formats.inference_workflow import (
                 MXDynamicActivationMXWeightConfig,
@@ -265,6 +271,39 @@ def quantize_component(
         return report
 
 
+def make_nvfp4_linear_inputs_contiguous(module: torch.nn.Module) -> int:
+    """Guard TorchAO NVFP4 linears against non-contiguous SDXL activations.
+
+    TorchAO 0.17's ``nvfp4_linear`` flattens its input with ``view`` rather
+    than ``reshape``. SDXL attention commonly supplies permuted 3D tensors,
+    for which that operation raises. Keep the dependency untouched and make
+    only inputs to quantized Linear modules contiguous.
+    """
+
+    def contiguous_input(
+        _child: torch.nn.Module, args: tuple[Any, ...]
+    ) -> tuple[Any, ...] | None:
+        if not args or not isinstance(args[0], torch.Tensor):
+            return None
+        if args[0].is_contiguous():
+            return None
+        return (args[0].contiguous(), *args[1:])
+
+    hooked = 0
+    for child in module.modules():
+        if not isinstance(child, torch.nn.Linear):
+            continue
+        weight = getattr(child, "weight", None)
+        if type(weight).__name__ != "NVFP4Tensor":
+            continue
+        if getattr(child, "_xwave_nvfp4_contiguous_hook", False):
+            continue
+        child.register_forward_pre_hook(contiguous_input)
+        child._xwave_nvfp4_contiguous_hook = True
+        hooked += 1
+    return hooked
+
+
 def compile_component(
     module: torch.nn.Module,
     report: OptimizationReport,
@@ -273,6 +312,11 @@ def compile_component(
     """Regionally compile repeated blocks, preserving a usable eager fallback."""
     enabled = bool(config.get("optimization", "compile", default=True))
     if not enabled:
+        return report
+    if report.component == "sdxl" and report.applied == "nvfp4":
+        # Torch 2.13 regional compilation decomposes SDXL's batched Linear
+        # into aten.expand(weight), which TorchAO NVFP4Tensor does not
+        # implement. Eager Linear uses TorchAO's native NVFP4 kernel.
         return report
     mode = str(config.get("optimization", "compile_mode", default="default"))
     fullgraph = bool(config.get("optimization", "compile_fullgraph", default=True))
