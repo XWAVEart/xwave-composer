@@ -13,6 +13,15 @@ Developed and tuned for an **RTX 5090** (~32 GB VRAM).
 
 Hybrid design: compose freely on the WORK canvas, refine with a fast SDXL Hyper pass that uses the WORK image as init.
 
+The UI has two **exclusive** tabs:
+
+| Tab | Stack | Use case |
+|-----|--------|----------|
+| **Compose** | Flux + isolator + SDXL OUTPUT | Multi-layer scenes with live OUTPUT refine |
+| **Infinite Canvas** | SDXL Hyper only | Large flat canvases built from overlapping region stamps |
+
+Only one tab owns the GPU stack at a time. Switching tabs unloads the other mode’s models to free VRAM.
+
 ## Requirements
 
 - Linux
@@ -346,20 +355,139 @@ LLM rewrite is off by default.
 9. Press **Refine OUTPUT** when the result is good.
 10. Export 2× with SeedVR2, or run a flipbook.
 
-### 18. Infinite Canvas Mode (region generation)
+### 18. Infinite Canvas Mode
 
-Infinite Canvas is a separate tab for patchwork region generation over an expandable canvas. It does not use the WORK/OUTPUT layer stack. It shares style presets and the Hyper SDXL pipeline with Compose, but **only one system is active at a time**: switching to Infinite Canvas unloads Flux / isolator / LLM; switching back to Compose re-enables OUTPUT (press **Load models** if Flux was freed).
+Infinite Canvas is a separate tab for building **large flat images** from overlapping SDXL Hyper region stamps. It does not use the Compose WORK/OUTPUT layer stack, Flux, rembg/SAM2, or the LLM rewriter. It **does** share the same style preset CSV, SDXL base presets, and Hyper img2img pipeline as Compose.
+
+Typical uses: outpainting beyond a fixed frame, tiled murals, panoramic scenes, and iterative “paint forward” workflows where each stamp extends or refines what came before.
+
+#### Switching between Compose and Infinite Canvas
+
+1. Use the **Compose** and **Infinite Canvas** tabs at the top of the app.
+2. Switching to **Infinite Canvas** unloads Flux, the isolator, and the LLM. SDXL is kept when already loaded; otherwise press **Load SDXL** in that tab.
+3. Switching back to **Compose** re-enables the Compose stack. Press **Load models** if Flux was unloaded.
+4. Compose live OUTPUT and Infinite Canvas generation share one SDXL mutex — only one can run inference at a time.
+5. Pending Compose OUTPUT refreshes are deferred while you stay on Infinite Canvas; they resume when you return to Compose.
+
+#### Load SDXL
 
 1. Open the **Infinite Canvas** tab.
-2. Choose the SDXL **base model** and **performance** (BF16 / MXFP8 / NVFP4), then press **Load SDXL**.
-3. Set Width/Height (or pick a preset to fill those fields), then **Create**. Sizes snap to multiples of 64.
-4. Expand the canvas in any direction when you need more room, or **Reset** to clear paint.
-5. Pan with drag / Shift-drag; zoom with the mouse wheel; double-click to fit.
-6. Move the teal region (it may hang off the canvas edge), set aspect ratio, and nudge size (±64).
-7. Enter a prompt for that region, pick a style (local to this tab), tune blend knobs if needed.
-8. Press **Generate region**. SDF strength map + Differential Diffusion on the shared Hyper stack: blank = full rewrite, overlaps fade; a low-res blueprint primes largely empty canvases.
-9. Press **Undo** to revert the last region.
-10. Optionally run **fused refine** (MultiDiffusion-style), then **Export** as PNG / JPEG / WebP (optional 2× SeedVR2).
+2. In **Model**, choose an SDXL **Base** (same presets as Compose OUTPUT) or type a custom Hugging Face repo / CivitAI link.
+3. Set **Performance** to **BF16**, **MXFP8 Balanced**, or **NVFP4 Maximum**, then press **Load SDXL**.
+4. Read **Loaded** for the applied compute path (quantization + compile status).
+5. Press **Free VRAM** to unload Flux and other Compose-only models without dropping SDXL.
+
+#### Create, expand, and reset the canvas
+
+1. Open **Canvas / expand**.
+2. Set **W** and **H**, or pick a **Preset** (`2048×2048`, `3072×3072`, `4096×4096`, `2048×3072`, `3072×2048`) to fill those fields.
+3. Press **Create**. Sizes snap to multiples of **64** (SDXL latent alignment).
+4. To grow the document, set expansion pixels **L** / **R** / **T** / **B** and press **Expand**. Existing paint shifts to stay in place; the region box moves with the expansion.
+5. Press **Reset** to clear all pixels and occupancy while keeping the current canvas size and region placement.
+6. **Create** and **Reset** also reset the lazy global blueprint and world-anchored noise field.
+
+Canvas presets and region sizes always stay on the 64 px grid.
+
+#### Navigate the viewport
+
+The main view is an interactive canvas (not a static image).
+
+1. **Drag** on empty space to pan.
+2. **Shift-drag** also pans.
+3. Scroll the **mouse wheel** to zoom.
+4. **Double-click** to fit the full canvas in view.
+5. After **Create**, **Reset**, or **Expand**, the view recenters once to fit.
+
+#### Place and size the generation region
+
+The teal box is the **region stamp** — the area that will be written on the next **Generate region** pass. It may extend **outside** the canvas edge for outpainting; at least one 64 px cell always stays recoverable on-canvas.
+
+1. **Drag** the teal box to move it. On release it snaps smoothly to the 64 px grid.
+2. Open **Region numbers** for exact **X**, **Y**, **W**, **H**, or press **Apply** after editing.
+3. Set **Aspect** (`1:1`, `4:3`, `3:2`, `16:9`, `9:16`, `3:4`, `2:3`) to resize the stamp while keeping proportions.
+4. Press **Size +** / **Size −** to grow or shrink by 64 px on the short side.
+5. Default stamp size is **1024** on the short side unless you change aspect or size.
+
+#### Generate a region
+
+1. Type a **Prompt** for this region.
+2. Optionally pick a **Family** and **Style** (Infinite Canvas–local; same CSV as Compose).
+3. Open **Prompt options** for **Order**, **Manual prefix/suffix**, and **Built prompt** preview.
+4. Set **CFG**, **Steps**, **Eta**, and **Seed** (`-1` = random).
+5. Press **Generate region**.
+
+What happens under the hood:
+
+- **SDF strength map + Differential Diffusion** on the shared Hyper SDXL stack.
+- **Blank** areas get a full rewrite; **existing paint** fades in via the strength map so seams stay soft.
+- A **dilated read window** (region + feather + overlap + context pad) feeds the UNet; large windows are tiled at native **1024²** views.
+- **Persistent latents** store committed regions so re-encodes do not drift at boundaries.
+- **World-anchored noise** keeps overlapping stamps consistent at edges.
+- On a largely empty canvas, a low-res **blueprint** pass primes global composition before the first stamp (lazy; reused until you expand or reset).
+- Status shows stage timing when available, e.g. `timing prep=…s model=…s commit=…s total=…s`.
+
+Default generation knobs (adjustable under **Blending**): **Steps** 8, **CFG** 1.0, **Context pad** 128, **Read overlap** 256, **Feather** 96, **Falloff** 0.35, **Overpaint effect** 0.85.
+
+#### Blending controls
+
+Open **Blending** when seams or overpaint strength need tuning.
+
+| Control | Role |
+|---------|------|
+| **Context pad** | Extra context beyond the stamp edge (64 px steps) |
+| **Read overlap** | Wider read window for smoother transitions into existing paint |
+| **Feather** | Spatial fade width at the stamp boundary in the strength map |
+| **Falloff** | Shape of the SDF falloff inside the feather zone |
+| **Overpaint effect** | Denoise strength when the stamp sits entirely on existing paint; edges still blend via feather/falloff |
+
+Higher overlap and feather widen the read window and increase VRAM/time per stamp.
+
+#### Undo
+
+1. Press **Undo** to revert the last **Generate region** or **Run fused refine**.
+2. One level of undo is kept (snapshot before each write).
+
+#### Fused refine (full-canvas pass)
+
+After placing several regions, run a global polish pass:
+
+1. Open **Final refine**.
+2. Set **Prompt source**:
+   - **Selected style** — style prefix/suffix/negative only
+   - **Custom prompt** — your text exactly, no style injection
+   - **Custom prompt + selected style** — both
+3. Set **Denoise**, **Tile** (512–1536), and **Overlap**.
+4. Press **Run fused refine**.
+
+This runs a **MultiDiffusion-style** tiled ε-fusion refine across the full canvas using the same SDXL Hyper stack. It snapshots undo state first, like region generation.
+
+#### Export
+
+1. Open **Export**.
+2. Choose **PNG**, **JPEG**, or **WebP**.
+3. Optionally enable **Upscale 2× (SeedVR2)** — uses the same export subprocess as Compose (Flux/SDXL unload during upscale).
+4. Press **Export canvas**.
+5. Files are written to `exports/` as `large_canvas_<WxH>_<hash>.<ext>` and offered for download.
+
+Preview JPEGs for the live viewport are cached under `workspace/large_canvas_cache/`.
+
+#### Infinite Canvas — recommended sequence
+
+1. Open **Infinite Canvas** and **Load SDXL** with your preferred base and performance profile.
+2. **Create** a canvas (or **Expand** an existing one).
+3. Drag the teal region to the area you want, set aspect/size, and write a prompt (+ optional style).
+4. Press **Generate region**; repeat for adjacent areas, outpainting past edges as needed.
+5. Tune **Blending** if seams show; use **Undo** to step back one write.
+6. **Run fused refine** for a final global polish.
+7. **Export** PNG/JPEG/WebP (optionally 2× SeedVR2).
+
+#### Performance notes (Infinite Canvas)
+
+- First stamp on a cold canvas may include **blueprint** generation and **kernel compile** — later stamps at the same shape are faster.
+- A 1024² stamp typically expands to a ~1664² read window (feather + overlap + context), which can require **multiple 1024² UNet views** per step.
+- **CFG 1** (default) is recommended; CFG above 1 roughly doubles UNet work.
+- **NVFP4 Maximum** applies real NVFP4 to SDXL; regional compile is skipped for that path. Batched UNet views run one at a time under NVFP4.
+- Read the **Status** line for per-stage timing when tuning speed vs quality.
 
 ## Project layout
 
@@ -416,7 +544,7 @@ SeedVR2 export failures are shown explicitly by default instead of silently subs
 - The **Performance** selector can reload the diffusion pipelines in three modes:
   - **BF16** — no quantization; highest fidelity and broadest adapter compatibility.
   - **MXFP8 Balanced** — default; selective MXFP8 Flux plus conservative FP8 SDXL linear weights.
-  - **NVFP4 Maximum** — selective NVFP4 Flux for maximum VRAM savings; SDXL remains on its safer FP8 path.
+  - **NVFP4 Maximum** — selective NVFP4 on Flux and SDXL linear layers for maximum VRAM savings; SDXL skips regional compile under NVFP4 and uses single-view UNet batches.
 - Quantization only touches large eligible linear layers. Embeddings, normalization/output layers, SAM2, and rembg retain their quality-oriented precision.
 - Repeated Flux/SDXL blocks use regional `torch.compile`. The first generation at a new canvas shape compiles kernels and is slower; later generations reuse them.
 - If TorchAO, MSLK, a model source, or an adapter is incompatible, the loader discards the partial pipeline and reloads a clean BF16 pipeline. The Applied compute field reports the actual path.
