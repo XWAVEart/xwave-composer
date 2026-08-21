@@ -84,8 +84,9 @@ class AppConfig:
 
     def ensure_dirs(self) -> None:
         """Create workspace and model directories if missing."""
-        for key in ("models_cache", "layers_dir", "workspace_dir"):
-            p = _resolve_path(str(self.get("paths", key, default=key)), self.root)
+        for key in ("models_cache", "layers_dir", "workspace_dir", "library_dir"):
+            default = "library" if key == "library_dir" else key
+            p = _resolve_path(str(self.get("paths", key, default=default)), self.root)
             p.mkdir(parents=True, exist_ok=True)
         export_dir = _resolve_path(
             str(self.get("export", "output_dir", default="exports")), self.root

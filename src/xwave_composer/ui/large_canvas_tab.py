@@ -42,6 +42,9 @@ from xwave_composer.style.style_manager import (
     StyleManager,
     StylePreset,
 )
+from xwave_composer.library.render import pack_library_views
+from xwave_composer.library.store import ImageLibrary
+from xwave_composer.ui.library_tab import IC_IMPORT_PLACEMENTS, placement_key
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +171,7 @@ def build_large_canvas_tab(
     infer_lock: threading.Lock,
     upscaler: ImageUpscaler | None = None,
     free_vram_fn: Any | None = None,
+    library: ImageLibrary | None = None,
 ) -> dict[str, Any]:
     """Build Infinite Canvas controls inside the current Tab context."""
     lc = LargeCanvasSession(width=DEFAULT_CANVAS, height=DEFAULT_CANVAS)
@@ -501,6 +505,42 @@ def build_large_canvas_tab(
                         )
                     refine_btn = gr.Button("Run fused refine", size="sm")
 
+                with gr.Accordion("Import", open=False):
+                    import_place = gr.Radio(
+                        choices=list(IC_IMPORT_PLACEMENTS),
+                        value="Fit canvas",
+                        label="Placement",
+                    )
+                    import_file = gr.Image(
+                        type="pil",
+                        label="Drop or upload",
+                        height=100,
+                        buttons=[],
+                    )
+                    import_file_btn = gr.Button("Import file", size="sm")
+                    ic_lib_seed = (
+                        pack_library_views(library)[4:6]
+                        if library is not None
+                        else ("", "No images yet")
+                    )
+                    ic_lib_html = gr.HTML(
+                        value=ic_lib_seed[0],
+                        elem_classes=["xwave-lib-picker"],
+                    )
+                    with gr.Row(elem_classes=["xwave-lib-pager"]):
+                        ic_lib_prev = gr.Button("Prev", size="sm", scale=0, min_width=64)
+                        ic_lib_pager = gr.Textbox(
+                            value=ic_lib_seed[1],
+                            show_label=False,
+                            interactive=False,
+                            container=False,
+                            scale=1,
+                        )
+                        ic_lib_next = gr.Button("Next", size="sm", scale=0, min_width=64)
+                    gr.Markdown(
+                        '<p class="xwave-text-dim">Click a library thumb to import with the placement above.</p>'
+                    )
+
                 with gr.Accordion("Export", open=False):
                     export_fmt = gr.Radio(
                         choices=["PNG", "JPEG", "WebP"],
@@ -512,6 +552,16 @@ def build_large_canvas_tab(
                     )
                     export_btn = gr.Button("Export canvas", variant="primary", size="sm")
                     export_file = gr.File(label="Download", interactive=False)
+                    lib_save_name = gr.Textbox(
+                        label="Library name",
+                        placeholder="Optional name",
+                        lines=1,
+                    )
+                    lib_save_btn = gr.Button(
+                        "Save to library",
+                        size="sm",
+                        elem_classes=["xwave-lib-save-btn"],
+                    )
 
             with gr.Group(elem_classes=["xwave-lc-actions"]):
                 with gr.Row():
@@ -936,6 +986,18 @@ def build_large_canvas_tab(
             lc.status = f"Export failed: {exc}"
             return pack()[:6] + (gr.update(),)
 
+    def on_import_file(image, place):
+        if image is None:
+            lc.status = "Choose an image to import."
+            return pack()[:6] + (gr.update(),)
+        try:
+            encode = sdxl if sdxl is not None and sdxl.ready else None
+            lc.import_image(image, mode=placement_key(place), sdxl=encode)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Infinite Canvas import")
+            lc.status = f"Import failed: {exc}"
+        return pack()[:6] + (gr.update(),)
+
     out6 = [lc_html, lc_status, stamp_x, stamp_y, stamp_w, stamp_h, export_file]
     load_out = [
         lc_html,
@@ -1048,5 +1110,26 @@ def build_large_canvas_tab(
         outputs=out6,
     )
     export_btn.click(on_export, inputs=[export_fmt, export_upscale], outputs=out6)
+    import_file_btn.click(
+        on_import_file,
+        inputs=[import_file, import_place],
+        outputs=out6,
+    )
 
-    return {"session": lc, "html": lc_html, "status": lc_status}
+    return {
+        "session": lc,
+        "html": lc_html,
+        "status": lc_status,
+        "save_btn": lib_save_btn,
+        "save_name": lib_save_name,
+        "import_place": import_place,
+        "picker_html": ic_lib_html,
+        "picker_pager": ic_lib_pager,
+        "picker_prev": ic_lib_prev,
+        "picker_next": ic_lib_next,
+        "stamp_x": stamp_x,
+        "stamp_y": stamp_y,
+        "stamp_w": stamp_w,
+        "stamp_h": stamp_h,
+        "export_file": export_file,
+    }

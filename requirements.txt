@@ -30,6 +30,7 @@ pyyaml>=6.0
 einops>=0.8.0
 peft>=0.13.0
 scipy>=1.11.0
+scikit-image>=0.22.0
 tqdm>=4.66.0
 # Export-only SeedVR2 CLI runtime (installed by scripts/setup_seedvr2.py)
 omegaconf>=2.3.0

@@ -77,7 +77,7 @@ class ComposerSession:
     _rewrite_cache_key: str = ""
     _rewrite_cache_result: str = ""
     _flux_reload_pending: bool = False
-    # Exclusive UI mode: "compose" (Flux+WORK/OUTPUT) or "infinite_canvas" (SDXL stamps).
+    # Exclusive UI mode: "compose", "infinite_canvas", or "edit" (SAM2 layers).
     active_system: str = "compose"
     output_rev: int = 0
     status: str = "Ready"
@@ -1853,6 +1853,34 @@ class ComposerSession:
             )
             return self.status
 
+    def enter_edit_mode(self) -> str:
+        """Activate Edit: unload Flux/SDXL/LLM, keep isolator for SAM2."""
+        with self._lock:
+            self.active_system = "edit"
+            self._flux_reload_pending = False
+            unloaded: list[str] = []
+            if self.flux and self.flux.ready:
+                self.flux.unload()
+                unloaded.append("Flux")
+            if self.llm:
+                was = bool(getattr(self.llm, "ready", False))
+                self.llm.unload()
+                if was:
+                    unloaded.append("LLM")
+            if self.upscaler:
+                self.upscaler.unload()
+                unloaded.append("upscaler")
+            if self.sdxl and getattr(self.sdxl, "ready", False):
+                self.sdxl.unload()
+                unloaded.append("SDXL")
+            empty_cache()
+            what = ", ".join(unloaded) if unloaded else "heavy models already clear"
+            self.status = (
+                f"Edit mode — unloaded {what}. SAM2 kept for segmenting. "
+                f"{gpu_summary()}"
+            )
+            return self.status
+
     def enter_infinite_canvas_mode(self) -> str:
         """Activate Infinite Canvas: unload Compose stack, keep SDXL for stamps."""
         with self._lock:
@@ -1895,3 +1923,7 @@ class ComposerSession:
     @property
     def infinite_canvas_active(self) -> bool:
         return self.active_system == "infinite_canvas"
+
+    @property
+    def edit_active(self) -> bool:
+        return self.active_system == "edit"

@@ -15,6 +15,101 @@ from xwave_composer.device import empty_cache, hard_release
 logger = logging.getLogger(__name__)
 
 
+def tf_sam2_prompts(
+    points: list[tuple[float, float]],
+    labels: list[int],
+) -> tuple[list, list]:
+    """Nest clicks the way transformers Sam2Processor expects.
+
+    Points:  [image, object, point, xy]
+    Labels:  [image, object, point]
+    """
+    coords = [list(p) for p in points]
+    return [[coords]], [[list(labels)]]
+
+
+def refine_sam_mask(
+    mask_np: np.ndarray,
+    points: list[tuple[float, float]] | None = None,
+    labels: list[int] | None = None,
+    image_size: tuple[int, int] | None = None,
+    min_area_px: int = 48,
+    min_area_frac: float = 0.0004,
+    search_radius: int = 8,
+) -> np.ndarray:
+    """Drop disconnected specks so a click selects one object.
+
+    SAM2 often lights up tiny islands far from the prompt. Keep the connected
+    component under each positive click (or the largest blob if the click
+    missed), and discard everything else.
+    """
+    from scipy.ndimage import generate_binary_structure, label
+
+    arr = np.asarray(mask_np)
+    if arr.ndim > 2:
+        arr = np.squeeze(arr)
+    if arr.ndim != 2 or arr.size == 0:
+        return np.asarray(mask_np)
+    binary = arr > 127 if arr.dtype == np.uint8 and int(arr.max()) > 1 else arr > 0.5
+    if not binary.any():
+        return np.zeros(binary.shape, dtype=np.uint8)
+
+    labeled, count = label(binary, structure=generate_binary_structure(2, 2))
+    if count == 0:
+        return np.zeros(binary.shape, dtype=np.uint8)
+
+    mh, mw = binary.shape
+    sx = sy = 1.0
+    if image_size is not None:
+        iw, ih = int(image_size[0]), int(image_size[1])
+        if iw > 0 and ih > 0 and (mw, mh) != (iw, ih):
+            sx = mw / float(iw)
+            sy = mh / float(ih)
+
+    keep: set[int] = set()
+    labs = list(labels) if labels is not None else [1] * len(points or ())
+    for idx, pt in enumerate(points or ()):
+        lab = labs[idx] if idx < len(labs) else 1
+        if int(lab) != 1:
+            continue
+        cid = _component_near(labeled, pt[0] * sx, pt[1] * sy, search_radius)
+        if cid:
+            keep.add(cid)
+
+    if not keep:
+        areas = np.bincount(labeled.ravel())
+        min_area = max(int(min_area_px), int(round(mh * mw * float(min_area_frac))))
+        large = [i for i in range(1, count + 1) if int(areas[i]) >= min_area]
+        if large:
+            keep.add(max(large, key=lambda i: int(areas[i])))
+        elif count:
+            keep.add(int(np.argmax(areas[1:]) + 1))
+
+    cleaned = np.isin(labeled, list(keep))
+    return cleaned.astype(np.uint8) * 255
+
+
+def _component_near(labeled: np.ndarray, x: float, y: float, radius: int) -> int:
+    h, w = labeled.shape
+    xi = int(round(x))
+    yi = int(round(y))
+    if 0 <= yi < h and 0 <= xi < w:
+        cid = int(labeled[yi, xi])
+        if cid:
+            return cid
+    rad = max(0, int(radius))
+    y0, y1 = max(0, yi - rad), min(h, yi + rad + 1)
+    x0, x1 = max(0, xi - rad), min(w, xi + rad + 1)
+    patch = labeled[y0:y1, x0:x1]
+    ys, xs = np.nonzero(patch)
+    if ys.size == 0:
+        return 0
+    dy = (ys.astype(np.int32) + y0) - yi
+    dx = (xs.astype(np.int32) + x0) - xi
+    k = int(np.argmin(dx * dx + dy * dy))
+    return int(patch[ys[k], xs[k]])
+
+
 class ObjectIsolator:
     """Remove background from a generated object image.
 
@@ -29,6 +124,8 @@ class ObjectIsolator:
         self._rembg_session: Any = None
         self.backend_in_use: str | None = None
         self._sam2_error: str | None = None
+        self._cached_rgb: Image.Image | None = None
+        self._tf_cache: dict[str, Any] | None = None
 
     @property
     def sam2_ready(self) -> bool:
@@ -111,45 +208,200 @@ class ObjectIsolator:
             out = Image.open(BytesIO(out))
         return out.convert("RGBA")
 
+    def reset_image(self) -> None:
+        """Drop cached SAM2 image embeddings (call when the source image changes)."""
+        self._cached_rgb = None
+        self._tf_cache = None
+        pred = self._sam2_predictor
+        if isinstance(pred, dict) and pred.get("kind") == "sam2_pkg":
+            predictor = pred.get("predictor")
+            reset = getattr(predictor, "reset_predictor", None)
+            if callable(reset):
+                try:
+                    reset()
+                except Exception:  # noqa: BLE001
+                    logger.debug("SAM2 reset_predictor failed", exc_info=True)
+
+    def set_image(self, image: Image.Image) -> None:
+        """Encode ``image`` once so later point prompts reuse the embedding."""
+        if self._sam2_predictor is None:
+            self.load_sam2()
+        assert self._sam2_predictor is not None
+        rgb = image.convert("RGB")
+        if (
+            self._cached_rgb is not None
+            and self._cached_rgb.size == rgb.size
+            and id(self._cached_rgb) == id(rgb)
+        ):
+            return
+        self._cached_rgb = rgb
+        kind = self._sam2_predictor["kind"]
+        if kind == "sam2_pkg":
+            predictor = self._sam2_predictor["predictor"]
+            predictor.set_image(np.array(rgb))
+            self._tf_cache = None
+            return
+        if kind != "transformers":
+            return
+        import torch
+
+        model = self._sam2_predictor["model"]
+        processor = self._sam2_predictor["processor"]
+        encoded = processor(images=rgb, return_tensors="pt")
+        pixel_values = encoded["pixel_values"]
+        pixel_values = self._to_model(pixel_values)
+        self._tf_cache = {
+            "pixel_values": pixel_values,
+            "size": rgb.size,
+            "image_embeddings": None,
+        }
+        get_emb = getattr(model, "get_image_embeddings", None) or getattr(
+            model, "get_image_features", None
+        )
+        if not callable(get_emb):
+            return
+        try:
+            with torch.inference_mode():
+                self._tf_cache["image_embeddings"] = get_emb(pixel_values)
+        except Exception:  # noqa: BLE001
+            logger.debug("SAM2 embedding cache unavailable", exc_info=True)
+            self._tf_cache["image_embeddings"] = None
+
     def isolate_sam2_click(
         self,
         image: Image.Image,
         point_xy: tuple[float, float] | None = None,
         point_labels: list[int] | None = None,
+        points: list[tuple[float, float]] | None = None,
     ) -> Image.Image:
-        """Isolate using a positive click (x, y) in image pixel coords.
+        """Isolate using one or more clicks in image pixel coords.
 
         If no point is given, use the image center as a positive point.
         """
-        if self._sam2_predictor is None:
-            self.load_sam2()
-
-        assert self._sam2_predictor is not None
         rgb = image.convert("RGB")
         w, h = rgb.size
-        if point_xy is None:
-            point_xy = (w / 2.0, h / 2.0)
-        labels = point_labels or [1]
+        if points:
+            coords = [(float(x), float(y)) for x, y in points]
+        else:
+            if point_xy is None:
+                point_xy = (w / 2.0, h / 2.0)
+            coords = [(float(point_xy[0]), float(point_xy[1]))]
+        labels = list(point_labels) if point_labels is not None else [1] * len(coords)
+        if len(labels) != len(coords):
+            labels = (labels + [1] * len(coords))[: len(coords)]
+        mask_np = self.predict_mask(rgb, coords, labels)
+        return self._apply_mask(rgb, mask_np)
 
+    def predict_mask(
+        self,
+        image: Image.Image,
+        points: list[tuple[float, float]],
+        labels: list[int],
+    ) -> np.ndarray:
+        """Return a uint8 0/255 mask the same size as ``image``."""
+        if self._sam2_predictor is None:
+            self.load_sam2()
+        assert self._sam2_predictor is not None
+        rgb = image.convert("RGB")
+        if not points:
+            return np.zeros((rgb.height, rgb.width), dtype=np.uint8)
+        coords = [(float(x), float(y)) for x, y in points]
+        labs = list(labels) if labels is not None else [1] * len(coords)
+        if len(labs) != len(coords):
+            labs = (labs + [1] * len(coords))[: len(coords)]
         kind = self._sam2_predictor["kind"]
         if kind == "transformers":
-            return self._isolate_transformers(rgb, point_xy, labels)
-        if kind == "sam2_pkg":
-            return self._isolate_sam2_pkg(rgb, point_xy, labels)
-        raise RuntimeError(f"Unknown SAM2 backend kind: {kind}")
+            mask_np = self._predict_transformers(rgb, coords, labs)
+        elif kind == "sam2_pkg":
+            mask_np = self._predict_sam2_pkg(rgb, coords, labs)
+        else:
+            raise RuntimeError(f"Unknown SAM2 backend kind: {kind}")
+        min_px = int(self.config.get("isolation", "sam2", "min_speckle_px", default=48) or 48)
+        min_frac = float(self.config.get("isolation", "sam2", "min_speckle_frac", default=0.0004) or 0.0)
+        return refine_sam_mask(
+            mask_np,
+            coords,
+            labs,
+            image_size=rgb.size,
+            min_area_px=min_px,
+            min_area_frac=min_frac,
+        )
 
-    def _isolate_transformers(
+    def _to_model(self, value: Any) -> Any:
+        """Move tensors onto the SAM2 device; floats follow the model dtype."""
+        if not hasattr(value, "to"):
+            return value
+        model = (self._sam2_predictor or {}).get("model")
+        dtype = getattr(model, "dtype", None)
+        if dtype is not None and torch.is_floating_point(value):
+            return value.to(device=self.device, dtype=dtype)
+        return value.to(self.device)
+
+    def _predict_transformers(
         self,
         rgb: Image.Image,
-        point_xy: tuple[float, float],
+        points: list[tuple[float, float]],
         labels: list[int],
-    ) -> Image.Image:
+    ) -> np.ndarray:
         import torch
 
         model = self._sam2_predictor["model"]
         processor = self._sam2_predictor["processor"]
-        input_points = [[[list(point_xy)]]]
-        input_labels = [[labels]]
+        # transformers Sam2Processor wants 4-level points / 3-level labels.
+        input_points, input_labels = tf_sam2_prompts(points, labels)
+
+        if self._tf_cache is None or self._tf_cache.get("size") != rgb.size:
+            self.set_image(rgb)
+
+        def _best_mask(outputs: Any, original_sizes: Any) -> np.ndarray:
+            # CPU interpolate / numpy cannot read bfloat16. Decode in float32.
+            pred = outputs.pred_masks.detach().float()
+            orig = original_sizes.cpu() if hasattr(original_sizes, "cpu") else original_sizes
+            masks = processor.post_process_masks(pred, orig)
+            mask_t = masks[0]
+            if hasattr(mask_t, "detach"):
+                mask_t = mask_t.detach().float().cpu()
+            if hasattr(outputs, "iou_scores") and outputs.iou_scores is not None:
+                scores = outputs.iou_scores[0].detach().float().cpu().numpy().reshape(-1)
+                best = int(np.argmax(scores))
+            else:
+                best = 0
+            if mask_t.ndim == 4:
+                mask_np = mask_t[0, min(best, mask_t.shape[1] - 1)].numpy()
+            elif mask_t.ndim == 3:
+                mask_np = mask_t[min(best, mask_t.shape[0] - 1)].numpy()
+            else:
+                mask_np = mask_t.numpy()
+            return (mask_np > 0.5).astype(np.uint8) * 255
+
+        cache = self._tf_cache or {}
+        try:
+            point_inputs = processor(
+                images=rgb,
+                input_points=input_points,
+                input_labels=input_labels,
+                return_tensors="pt",
+            )
+            orig = point_inputs["original_sizes"]
+            embeddings = cache.get("image_embeddings")
+            if embeddings is not None:
+                kwargs = {
+                    k: self._to_model(v)
+                    for k, v in point_inputs.items()
+                    if k != "pixel_values"
+                }
+                kwargs["image_embeddings"] = embeddings
+                with torch.inference_mode():
+                    outputs = model(**kwargs)
+                return _best_mask(outputs, orig)
+            if cache.get("pixel_values") is not None:
+                point_inputs["pixel_values"] = cache["pixel_values"]
+            inputs = {k: self._to_model(v) for k, v in point_inputs.items()}
+            with torch.inference_mode():
+                outputs = model(**inputs)
+            return _best_mask(outputs, inputs["original_sizes"])
+        except Exception:  # noqa: BLE001
+            logger.debug("SAM2 cached predict failed; running full forward", exc_info=True)
 
         inputs = processor(
             images=rgb,
@@ -157,43 +409,34 @@ class ObjectIsolator:
             input_labels=input_labels,
             return_tensors="pt",
         )
-        inputs = {k: v.to(self.device) if hasattr(v, "to") else v for k, v in inputs.items()}
-
+        inputs = {k: self._to_model(v) for k, v in inputs.items()}
         with torch.inference_mode():
             outputs = model(**inputs)
+        return _best_mask(outputs, inputs["original_sizes"])
 
-        masks = processor.post_process_masks(
-            outputs.pred_masks.cpu(),
-            inputs["original_sizes"].cpu(),
-        )
-        # masks[0] shape depends on version; pick highest-score mask when possible
-        mask_t = masks[0]
-        if hasattr(outputs, "iou_scores"):
-            scores = outputs.iou_scores[0].detach().cpu().numpy().reshape(-1)
-            best = int(np.argmax(scores))
-        else:
-            best = 0
-        mask_np = mask_t[0, best].numpy() if mask_t.ndim == 4 else mask_t[best].numpy()
-        mask_np = (mask_np > 0.5).astype(np.uint8) * 255
-        return self._apply_mask(rgb, mask_np)
-
-    def _isolate_sam2_pkg(
+    def _predict_sam2_pkg(
         self,
         rgb: Image.Image,
-        point_xy: tuple[float, float],
+        points: list[tuple[float, float]],
         labels: list[int],
-    ) -> Image.Image:
+    ) -> np.ndarray:
         predictor = self._sam2_predictor["predictor"]
-        arr = np.array(rgb)
-        predictor.set_image(arr)
+        if self._cached_rgb is None or self._cached_rgb.size != rgb.size:
+            self.set_image(rgb)
         masks, scores, _ = predictor.predict(
-            point_coords=np.array([point_xy], dtype=np.float32),
+            point_coords=np.array(points, dtype=np.float32),
             point_labels=np.array(labels, dtype=np.int32),
             multimask_output=True,
         )
         best = int(np.argmax(scores))
-        mask_np = (masks[best].astype(np.uint8)) * 255
-        return self._apply_mask(rgb, mask_np)
+        mask_np = masks[best]
+        if np.issubdtype(mask_np.dtype, np.floating) or mask_np.dtype == np.bool_:
+            mask_np = (mask_np > 0.5).astype(np.uint8) * 255
+        elif mask_np.max() <= 1:
+            mask_np = mask_np.astype(np.uint8) * 255
+        else:
+            mask_np = mask_np.astype(np.uint8)
+        return mask_np
 
     @staticmethod
     def _apply_mask(rgb: Image.Image, mask_np: np.ndarray) -> Image.Image:
@@ -235,6 +478,7 @@ class ObjectIsolator:
         return out, "rembg"
 
     def unload(self) -> None:
+        self.reset_image()
         pred = self._sam2_predictor
         rembg = self._rembg_session
         self._sam2_predictor = None

@@ -23,5 +23,7 @@ def test_ensure_dirs(tmp_path, monkeypatch):
     cfg.raw.setdefault("style", {})["lora_dir"] = str(tmp_path / "loras")
     cfg.raw["style"]["embedding_dir"] = str(tmp_path / "emb")
     cfg.raw["style"]["phrases_file"] = str(tmp_path / "styles.json")
+    cfg.raw["paths"]["library_dir"] = str(tmp_path / "library")
     cfg.ensure_dirs()
     assert (tmp_path / "ws" / "layers").exists() or cfg.path("paths", "layers_dir").exists()
+    assert cfg.path("paths", "library_dir").exists()

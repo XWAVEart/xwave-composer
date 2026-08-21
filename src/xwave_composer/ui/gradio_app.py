@@ -33,8 +33,17 @@ from xwave_composer.optimization import (
 )
 from xwave_composer.pipeline.quality_modes import normalize_quality_mode
 from xwave_composer.pipeline.session import ComposerSession
+from xwave_composer.pipeline.edit import EditSession
 from xwave_composer.style.style_manager import CONCAT_ORDERS, STYLE_FAMILIES
-from xwave_composer.ui.large_canvas_tab import build_large_canvas_tab
+from xwave_composer.ui.large_canvas_tab import _scene_html, build_large_canvas_tab
+from xwave_composer.ui.edit_tab import build_edit_tab
+from xwave_composer.ui.library_tab import (
+    build_library_tab,
+    placement_key,
+    shift_page,
+)
+from xwave_composer.library.render import pack_library_views, selected_item_outputs
+from xwave_composer.library.store import ImageLibrary
 from xwave_composer.models.upscaler import (
     DEFAULT_SEEDVR2_MODEL,
     SEEDVR2_MODEL_CHOICES,
@@ -468,10 +477,11 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
     session = ComposerSession(config=config)
     session.doc.selected_id = "__bg__"
     cw, ch = config.canvas_size
+    library = ImageLibrary(config.path("paths", "library_dir", default="library"))
 
     css = (ASSETS / "app.css").read_text(encoding="utf-8") if (ASSETS / "app.css").exists() else ""
     js_parts: list[str] = []
-    for name in ("work_canvas.js", "tooltips.js", "large_canvas.js"):
+    for name in ("work_canvas.js", "tooltips.js", "large_canvas.js", "library.js", "edit.js"):
         path = ASSETS / name
         if path.exists():
             js_parts.append(path.read_text(encoding="utf-8"))
@@ -740,6 +750,13 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             show_label=False,
         )
         rev_state = gr.State(-1)
+        lib_action = gr.Textbox(
+            value="",
+            elem_id="xwave-lib-action",
+            elem_classes=["xwave-hidden"],
+            container=False,
+            show_label=False,
+        )
 
         gr.Markdown(
             '<p class="xwave-brand">XWAVE COMPOSER</p>',
@@ -1170,6 +1187,28 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                                         elem_classes=["xwave-import"],
                                     )
                                     import_btn = gr.Button("Import into layer", size="sm")
+                                    compose_lib_seed = pack_library_views(library)
+                                    compose_lib_html = gr.HTML(
+                                        value=compose_lib_seed[2],
+                                        elem_classes=["xwave-lib-picker"],
+                                    )
+                                    with gr.Row(elem_classes=["xwave-lib-pager"]):
+                                        compose_lib_prev = gr.Button(
+                                            "Prev", size="sm", scale=0, min_width=64
+                                        )
+                                        compose_lib_pager = gr.Textbox(
+                                            value=compose_lib_seed[3],
+                                            show_label=False,
+                                            interactive=False,
+                                            container=False,
+                                            scale=1,
+                                        )
+                                        compose_lib_next = gr.Button(
+                                            "Next", size="sm", scale=0, min_width=64
+                                        )
+                                    gr.Markdown(
+                                        '<p class="xwave-text-dim">Click a library thumb to import into the selected layer.</p>'
+                                    )
 
                             # —— Output style ——
                             with gr.Column(scale=1, min_width=250, elem_classes=["xwave-panel"]):
@@ -1468,6 +1507,16 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                                     size="sm",
                                     elem_classes=["xwave-export-btn"],
                                 )
+                                lib_save_name = gr.Textbox(
+                                    label="Library name",
+                                    placeholder="Optional name",
+                                    lines=1,
+                                )
+                                lib_save_btn = gr.Button(
+                                    "Save to library",
+                                    size="sm",
+                                    elem_classes=["xwave-lib-save-btn"],
+                                )
                                 export_path = gr.Textbox(
                                     label="Export path", interactive=False, lines=1
                                 )
@@ -1566,9 +1615,27 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                     infer_lock=infer_lock,
                     upscaler=session.upscaler,
                     free_vram_fn=session.enter_infinite_canvas_mode,
+                    library=library,
                 )
                 demo._xwave_large_canvas = _lc_ui  # type: ignore[attr-defined]
                 lc_status = _lc_ui["status"]
+
+            with gr.Tab("Edit", elem_id="xwave-edit-tab"):
+                edit_session = EditSession(isolator=session.isolator)
+                _edit_ui = build_edit_tab(
+                    session=edit_session,
+                    config=config,
+                    infer_lock=infer_lock,
+                    upscaler=session.upscaler,
+                    composer=session,
+                    library=library,
+                )
+                demo._xwave_edit = _edit_ui  # type: ignore[attr-defined]
+                edit_status = _edit_ui["status"]
+
+            with gr.Tab("Library", elem_id="xwave-library-tab"):
+                _lib_ui = build_library_tab(library)
+                demo._xwave_library = _lib_ui  # type: ignore[attr-defined]
         # ── Callbacks ───────────────────────────────────────────
         pack_out = [
             work_html,
@@ -1601,6 +1668,92 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             bg_flip_y,
         ]
         settings_in = [denoise, out_steps, cfg, eta, use_llm, neg_prompt, out_seed]
+        lc = _lc_ui["session"]
+        lib_browse_off = _lib_ui["browse_offset"]
+        lib_compose_off = _lib_ui["compose_offset"]
+        lib_ic_off = _lib_ui["ic_offset"]
+        lib_edit_off = _edit_ui["offset"]
+        lib_selected = _lib_ui["selected_id"]
+        lib_view_out = [
+            lib_browse_off,
+            lib_compose_off,
+            lib_ic_off,
+            lib_edit_off,
+            lib_selected,
+            _lib_ui["html"],
+            _lib_ui["pager"],
+            compose_lib_html,
+            compose_lib_pager,
+            _lc_ui["picker_html"],
+            _lc_ui["picker_pager"],
+            _edit_ui["picker_html"],
+            _edit_ui["picker_pager"],
+            _lib_ui["preview"],
+            _lib_ui["name"],
+            _lib_ui["meta"],
+            _lib_ui["download"],
+        ]
+        lc_pack_out = [
+            _lc_ui["html"],
+            lc_status,
+            _lc_ui["stamp_x"],
+            _lc_ui["stamp_y"],
+            _lc_ui["stamp_w"],
+            _lc_ui["stamp_h"],
+            _lc_ui["export_file"],
+        ]
+        edit_pack_out = _edit_ui["pack_out"]
+
+        def _lib_pack(
+            browse_off=0,
+            compose_off=0,
+            ic_off=0,
+            edit_off=0,
+            selected_id="",
+        ):
+            b = library.page(int(browse_off or 0)).offset
+            c = library.page(int(compose_off or 0)).offset
+            i = library.page(int(ic_off or 0)).offset
+            e = library.page(int(edit_off or 0)).offset
+            sid = str(selected_id or "")
+            if sid and library.get(sid) is None:
+                sid = ""
+            views = pack_library_views(
+                library,
+                browse_offset=b,
+                compose_offset=c,
+                ic_offset=i,
+                edit_offset=e,
+                selected_id=sid or None,
+            )
+            preview = selected_item_outputs(library, sid)
+            return (b, c, i, e, sid, *views, *preview)
+
+        def _skip_pack():
+            return tuple(gr.skip() for _ in pack_out)
+
+        def _skip_lc():
+            return tuple(gr.skip() for _ in lc_pack_out)
+
+        def _skip_edit():
+            return tuple(gr.skip() for _ in edit_pack_out)
+
+        def _edit_pack():
+            return _edit_ui["pack"]()
+
+        def _lc_pack():
+            return (
+                _scene_html_lc(),
+                lc.status,
+                lc.stamp.x,
+                lc.stamp.y,
+                lc.stamp.w,
+                lc.stamp.h,
+                gr.update(),
+            )
+
+        def _scene_html_lc():
+            return _scene_html(config, lc)
 
         def apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed):
             s = session.output_settings
@@ -1624,10 +1777,18 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 return session.free_optional()
 
         def on_main_tab(evt: gr.SelectData):
-            """Exclusive mode: Compose ↔ Infinite Canvas never share the GPU stack."""
-            label = str(getattr(evt, "value", "") or "")
-            idx = int(getattr(evt, "index", 0) or 0)
-            want_ic = idx == 1 or "infinite" in label.lower()
+            """Exclusive GPU mode when switching Compose ↔ Infinite Canvas ↔ Edit."""
+            label = str(getattr(evt, "value", "") or "").strip().lower()
+            # Gradio may pass the tab label as a dict-like value.
+            if isinstance(getattr(evt, "value", None), dict):
+                label = str(evt.value.get("label") or evt.value.get("value") or "").strip().lower()
+            if "library" in label:
+                return gr.skip(), gr.skip(), gr.skip()
+            want_ic = "infinite" in label
+            want_compose = "compose" in label
+            want_edit = label == "edit" or label.startswith("edit")
+            if not want_ic and not want_compose and not want_edit:
+                return gr.skip(), gr.skip(), gr.skip()
             with infer_lock:
                 if want_ic:
                     with out_lock:
@@ -1637,10 +1798,19 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                         out_state["running"] = False
                         out_state["pending"] = remember
                     msg = session.enter_infinite_canvas_mode()
-                    return msg, msg
+                    return msg, msg, msg
+                if want_edit:
+                    with out_lock:
+                        remember = bool(out_state["dirty"] or out_state["pending"])
+                        out_state["token"] += 1
+                        out_state["dirty"] = False
+                        out_state["running"] = False
+                        out_state["pending"] = remember
+                    msg = session.enter_edit_mode()
+                    return msg, msg, msg
                 msg = session.enter_compose_mode()
             flush_pending_output()
-            return msg, msg
+            return msg, msg, msg
 
         def on_action(payload, den, steps, cfg_v, eta_v, llm, neg, oseed):
             apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
@@ -1938,6 +2108,266 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
                 session.status = f"Import failed: {exc}"
                 return pack(run_out=False)
             return pack_work_then_output()
+
+        def on_compose_save_lib(name, browse_off, compose_off, ic_off, edit_off, selected):
+            img = session.last_output or session.last_work
+            if img is None:
+                session.status = "Nothing to save — generate an OUTPUT first."
+                return (session.status, *_lib_pack(browse_off, compose_off, ic_off, edit_off, selected))
+            try:
+                item = library.add(img, "compose", name)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Library save failed")
+                session.status = f"Library save failed: {exc}"
+                return (session.status, *_lib_pack(browse_off, compose_off, ic_off, edit_off, selected))
+            session.status = f"Saved to library ({item.width}×{item.height})."
+            return (session.status, *_lib_pack(0, 0, 0, 0, item.id))
+
+        def on_ic_save_lib(name, browse_off, compose_off, ic_off, edit_off, selected):
+            with lc._lock:
+                img = lc.image.copy()
+            try:
+                item = library.add(img, "infinite_canvas", name)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Library save failed")
+                lc.status = f"Library save failed: {exc}"
+                return (lc.status, *_lib_pack(browse_off, compose_off, ic_off, edit_off, selected))
+            lc.status = f"Saved to library ({item.width}×{item.height})."
+            return (lc.status, *_lib_pack(0, 0, 0, 0, item.id))
+
+        def on_edit_save_lib(name, browse_off, compose_off, ic_off, edit_off, selected):
+            if not edit_session.has_image:
+                edit_session.status = "Load an image first."
+                return (edit_session.status, *_lib_pack(browse_off, compose_off, ic_off, edit_off, selected))
+            try:
+                item = library.add(edit_session.flatten(), "edit", name)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Library save failed")
+                edit_session.status = f"Library save failed: {exc}"
+                return (edit_session.status, *_lib_pack(browse_off, compose_off, ic_off, edit_off, selected))
+            edit_session.status = f"Saved to library ({item.width}×{item.height})."
+            return (edit_session.status, *_lib_pack(0, 0, 0, 0, item.id))
+
+        def on_lib_page(which, delta, browse_off, compose_off, ic_off, edit_off, selected):
+            if which == "browse":
+                browse_off = shift_page(library, browse_off, delta)
+            elif which == "compose":
+                compose_off = shift_page(library, compose_off, delta)
+            elif which == "edit":
+                edit_off = shift_page(library, edit_off, delta)
+            else:
+                ic_off = shift_page(library, ic_off, delta)
+            return _lib_pack(browse_off, compose_off, ic_off, edit_off, selected)
+
+        def on_lib_rename(name, selected, browse_off, compose_off, ic_off, edit_off):
+            if selected:
+                library.set_name(str(selected), name)
+            return _lib_pack(browse_off, compose_off, ic_off, edit_off, selected)
+
+        def on_lib_delete(selected, browse_off, compose_off, ic_off, edit_off):
+            if selected:
+                library.delete(str(selected))
+            return _lib_pack(browse_off, compose_off, ic_off, edit_off, "")
+
+        def _import_lib_compose(
+            item_id,
+            cutout,
+            prompt,
+            den,
+            steps,
+            cfg_v,
+            eta_v,
+            llm,
+            neg,
+            oseed,
+            browse_off,
+            compose_off,
+            ic_off,
+            edit_off,
+        ):
+            apply_settings(den, steps, cfg_v, eta_v, llm, neg, oseed)
+            img = library.open_full(str(item_id or ""))
+            if img is None:
+                session.status = "Select a library image first."
+                return (
+                    *pack(run_out=False),
+                    *_skip_lc(),
+                    *_skip_edit(),
+                    *_lib_pack(browse_off, compose_off, ic_off, edit_off, item_id),
+                )
+            try:
+                session.import_into_selected(
+                    img, cutout=_cutout_prefer(cutout), prompt=str(prompt or "")
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Library import failed")
+                session.status = f"Import failed: {exc}"
+                return (
+                    *pack(run_out=False),
+                    *_skip_lc(),
+                    *_skip_edit(),
+                    *_lib_pack(browse_off, compose_off, ic_off, edit_off, item_id),
+                )
+            return (
+                *pack_work_then_output(),
+                *_skip_lc(),
+                *_skip_edit(),
+                *_lib_pack(browse_off, compose_off, ic_off, edit_off, item_id),
+            )
+
+        def _import_lib_ic(item_id, place, browse_off, compose_off, ic_off, edit_off):
+            img = library.open_full(str(item_id or ""))
+            if img is None:
+                lc.status = "Select a library image first."
+                return (
+                    *_skip_pack(),
+                    *_lc_pack(),
+                    *_skip_edit(),
+                    *_lib_pack(browse_off, compose_off, ic_off, edit_off, item_id),
+                )
+            try:
+                encode = session.sdxl if session.sdxl is not None and session.sdxl.ready else None
+                lc.import_image(img, mode=placement_key(place), sdxl=encode)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Library import to Infinite Canvas failed")
+                lc.status = f"Import failed: {exc}"
+            return (
+                *_skip_pack(),
+                *_lc_pack(),
+                *_skip_edit(),
+                *_lib_pack(browse_off, compose_off, ic_off, edit_off, item_id),
+            )
+
+        def _import_lib_edit(item_id, browse_off, compose_off, ic_off, edit_off):
+            img = library.open_full(str(item_id or ""))
+            item = library.get(str(item_id or ""))
+            if img is None:
+                edit_session.status = "Select a library image first."
+                return (
+                    *_skip_pack(),
+                    *_skip_lc(),
+                    *_edit_pack(),
+                    *_lib_pack(browse_off, compose_off, ic_off, edit_off, item_id),
+                )
+            try:
+                edit_session.load(img, name=(item.name if item else ""))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Library import to Edit failed")
+                edit_session.status = f"Import failed: {exc}"
+            return (
+                *_skip_pack(),
+                *_skip_lc(),
+                *_edit_pack(),
+                *_lib_pack(browse_off, compose_off, ic_off, edit_off, item_id),
+            )
+
+        def on_lib_action(
+            payload,
+            selected,
+            browse_off,
+            compose_off,
+            ic_off,
+            edit_off,
+            cutout,
+            prompt,
+            den,
+            steps,
+            cfg_v,
+            eta_v,
+            llm,
+            neg,
+            oseed,
+            lib_place,
+            lc_place,
+        ):
+            if not payload or not str(payload).strip():
+                return (
+                    *_skip_pack(),
+                    *_skip_lc(),
+                    *_skip_edit(),
+                    *_lib_pack(browse_off, compose_off, ic_off, edit_off, selected),
+                )
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                return (
+                    *_skip_pack(),
+                    *_skip_lc(),
+                    *_skip_edit(),
+                    *_lib_pack(browse_off, compose_off, ic_off, edit_off, selected),
+                )
+            item_id = str(data.get("id") or "")
+            ctx = str(data.get("context") or "browse")
+            if ctx == "compose":
+                return _import_lib_compose(
+                    item_id,
+                    cutout,
+                    prompt,
+                    den,
+                    steps,
+                    cfg_v,
+                    eta_v,
+                    llm,
+                    neg,
+                    oseed,
+                    browse_off,
+                    compose_off,
+                    ic_off,
+                    edit_off,
+                )
+            if ctx == "infinite":
+                return _import_lib_ic(
+                    item_id, lc_place, browse_off, compose_off, ic_off, edit_off
+                )
+            if ctx == "edit":
+                return _import_lib_edit(
+                    item_id, browse_off, compose_off, ic_off, edit_off
+                )
+            return (
+                *_skip_pack(),
+                *_skip_lc(),
+                *_skip_edit(),
+                *_lib_pack(browse_off, compose_off, ic_off, edit_off, item_id),
+            )
+
+        def on_lib_to_compose(
+            selected,
+            cutout,
+            prompt,
+            den,
+            steps,
+            cfg_v,
+            eta_v,
+            llm,
+            neg,
+            oseed,
+            browse_off,
+            compose_off,
+            ic_off,
+            edit_off,
+        ):
+            return _import_lib_compose(
+                selected,
+                cutout,
+                prompt,
+                den,
+                steps,
+                cfg_v,
+                eta_v,
+                llm,
+                neg,
+                oseed,
+                browse_off,
+                compose_off,
+                ic_off,
+                edit_off,
+            )
+
+        def on_lib_to_ic(selected, place, browse_off, compose_off, ic_off, edit_off):
+            return _import_lib_ic(selected, place, browse_off, compose_off, ic_off, edit_off)
+
+        def on_lib_to_edit(selected, browse_off, compose_off, ic_off, edit_off):
+            return _import_lib_edit(selected, browse_off, compose_off, ic_off, edit_off)
 
         def on_prompt_lock(locked, current_text):
             s = session.output_settings
@@ -2360,7 +2790,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         )
         main_tabs.select(
             on_main_tab,
-            outputs=[status, lc_status],
+            outputs=[status, lc_status, edit_status],
             show_progress="hidden",
         ).then(
             render_vram_html, outputs=[vram_html], show_progress="hidden"
@@ -2512,6 +2942,122 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             on_import,
             inputs=[import_img, cutout_mode, insp_prompt, *settings_in],
             outputs=pack_out,
+        )
+        lib_event_out = [*pack_out, *lc_pack_out, *edit_pack_out, *lib_view_out]
+        lib_off_in = [lib_browse_off, lib_compose_off, lib_ic_off, lib_edit_off]
+        lib_action.change(
+            on_lib_action,
+            inputs=[
+                lib_action,
+                lib_selected,
+                *lib_off_in,
+                cutout_mode,
+                insp_prompt,
+                *settings_in,
+                _lib_ui["ic_place"],
+                _lc_ui["import_place"],
+            ],
+            outputs=lib_event_out,
+            show_progress="hidden",
+        )
+        lib_save_btn.click(
+            on_compose_save_lib,
+            inputs=[lib_save_name, *lib_off_in, lib_selected],
+            outputs=[status, *lib_view_out],
+            show_progress="hidden",
+        )
+        _lc_ui["save_btn"].click(
+            on_ic_save_lib,
+            inputs=[_lc_ui["save_name"], *lib_off_in, lib_selected],
+            outputs=[lc_status, *lib_view_out],
+            show_progress="hidden",
+        )
+        _edit_ui["save_btn"].click(
+            on_edit_save_lib,
+            inputs=[_edit_ui["save_name"], *lib_off_in, lib_selected],
+            outputs=[edit_status, *lib_view_out],
+            show_progress="hidden",
+        )
+        _lib_ui["prev"].click(
+            lambda *a: on_lib_page("browse", -1, *a),
+            inputs=[*lib_off_in, lib_selected],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        _lib_ui["next"].click(
+            lambda *a: on_lib_page("browse", 1, *a),
+            inputs=[*lib_off_in, lib_selected],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        compose_lib_prev.click(
+            lambda *a: on_lib_page("compose", -1, *a),
+            inputs=[*lib_off_in, lib_selected],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        compose_lib_next.click(
+            lambda *a: on_lib_page("compose", 1, *a),
+            inputs=[*lib_off_in, lib_selected],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        _lc_ui["picker_prev"].click(
+            lambda *a: on_lib_page("infinite", -1, *a),
+            inputs=[*lib_off_in, lib_selected],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        _lc_ui["picker_next"].click(
+            lambda *a: on_lib_page("infinite", 1, *a),
+            inputs=[*lib_off_in, lib_selected],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        _edit_ui["picker_prev"].click(
+            lambda *a: on_lib_page("edit", -1, *a),
+            inputs=[*lib_off_in, lib_selected],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        _edit_ui["picker_next"].click(
+            lambda *a: on_lib_page("edit", 1, *a),
+            inputs=[*lib_off_in, lib_selected],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        _lib_ui["rename"].click(
+            on_lib_rename,
+            inputs=[_lib_ui["name"], lib_selected, *lib_off_in],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        _lib_ui["delete"].click(
+            on_lib_delete,
+            inputs=[lib_selected, *lib_off_in],
+            outputs=lib_view_out,
+            show_progress="hidden",
+        )
+        _lib_ui["to_compose"].click(
+            on_lib_to_compose,
+            inputs=[
+                lib_selected,
+                cutout_mode,
+                insp_prompt,
+                *settings_in,
+                *lib_off_in,
+            ],
+            outputs=lib_event_out,
+        )
+        _lib_ui["to_ic"].click(
+            on_lib_to_ic,
+            inputs=[lib_selected, _lib_ui["ic_place"], *lib_off_in],
+            outputs=lib_event_out,
+        )
+        _lib_ui["to_edit"].click(
+            on_lib_to_edit,
+            inputs=[lib_selected, *lib_off_in],
+            outputs=lib_event_out,
         )
         prompt_lock.input(
             on_prompt_lock,
@@ -2838,12 +3384,15 @@ def _launch_kwargs(demo: gr.Blocks, config: AppConfig) -> dict:
     exports = config.path("export", "output_dir", default="exports").resolve()
     exports.mkdir(parents=True, exist_ok=True)
     _OUTPUT_JPEG_DIR.mkdir(parents=True, exist_ok=True)
+    library = config.path("paths", "library_dir", default="library").resolve()
+    library.mkdir(parents=True, exist_ok=True)
     kwargs["allowed_paths"] = [
         str(workspace),
         str(layers),
         str(scene_cache),
         str(lc_cache),
         str(exports),
+        str(library),
         str(_OUTPUT_JPEG_DIR.resolve()),
     ]
     theme = getattr(demo, "_xwave_theme", None)

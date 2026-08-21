@@ -84,6 +84,9 @@ isolation:
     # transformers-compatible SAM 2.1 weights
     model_id: "facebook/sam2.1-hiera-large"
     checkpoint: null  # optional local .pt path for the official sam2 package
+    # Hover/click keeps the blob under the cursor and drops distant specks.
+    min_speckle_px: 48
+    min_speckle_frac: 0.0004
   rembg:
     model: "u2net"
 
@@ -146,6 +149,7 @@ paths:
   models_cache: "models"
   layers_dir: "workspace/layers"
   workspace_dir: "workspace"
+  library_dir: "library"
 
 # Gradio server
 server:

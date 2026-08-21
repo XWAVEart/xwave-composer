@@ -13,14 +13,16 @@ Developed and tuned for an **RTX 5090** (~32 GB VRAM).
 
 Hybrid design: compose freely on the WORK canvas, refine with a fast SDXL Hyper pass that uses the WORK image as init.
 
-The UI has two **exclusive** tabs:
+The UI has four tabs. **Compose**, **Infinite Canvas**, and **Edit** are GPU-exclusive (only one owns the heavy model stack). **Library** is GPU-neutral and keeps saved stills on disk between sessions.
 
 | Tab | Stack | Use case |
 |-----|--------|----------|
 | **Compose** | Flux + isolator + SDXL OUTPUT | Multi-layer scenes with live OUTPUT refine |
 | **Infinite Canvas** | SDXL Hyper only | Large flat canvases built from overlapping region stamps |
+| **Edit** | SAM2 isolator | Load a still, click-segment layers, save / export / upscale |
+| **Library** | none | Browse, name, download, delete, and send saved stills into Compose, Infinite Canvas, or Edit |
 
-Only one tab owns the GPU stack at a time. Switching tabs unloads the other mode’s models to free VRAM.
+Switching between **Compose**, **Infinite Canvas**, and **Edit** unloads the other mode’s models to free VRAM. Opening **Library** does not change the GPU stack.
 
 ## Requirements
 
@@ -176,9 +178,9 @@ Object layers are cutout layers that you add.
 
 1. Select the target layer.
 2. Open **Import image**.
-3. Drop or upload an image.
-4. Set the cutout mode if you need a cutout.
-5. Press **Import into layer**.
+3. Drop or upload a file, then press **Import into layer**, or click a **library** thumbnail to import that still.
+4. Set the cutout mode if you need a cutout (file import uses **Import into layer**; library clicks import immediately).
+5. Use **Save to library** in the output panel to keep the current OUTPUT (or WORK if OUTPUT is empty) without upscaling.
 
 ### 8. Transform layers
 
@@ -361,13 +363,17 @@ Infinite Canvas is a separate tab for building **large flat images** from overla
 
 Typical uses: outpainting beyond a fixed frame, tiled murals, panoramic scenes, and iterative “paint forward” workflows where each stamp extends or refines what came before.
 
-#### Switching between Compose and Infinite Canvas
+#### Switching between Compose, Infinite Canvas, and Edit
 
-1. Use the **Compose** and **Infinite Canvas** tabs at the top of the app.
+1. Use the **Compose**, **Infinite Canvas**, and **Edit** tabs at the top of the app.
 2. Switching to **Infinite Canvas** unloads Flux, the isolator, and the LLM. SDXL is kept when already loaded; otherwise press **Load SDXL** in that tab.
-3. Switching back to **Compose** re-enables the Compose stack. Press **Load models** if Flux was unloaded.
-4. Compose live OUTPUT and Infinite Canvas generation share one SDXL mutex — only one can run inference at a time.
-5. Pending Compose OUTPUT refreshes are deferred while you stay on Infinite Canvas; they resume when you return to Compose.
+3. Switching to **Edit** unloads Flux, SDXL, and the LLM. The SAM2 isolator is kept (or loaded on the first click) so you can segment a still.
+4. Switching back to **Compose** re-enables the Compose stack. Press **Load models** if Flux was unloaded.
+5. Compose live OUTPUT and Infinite Canvas generation share one SDXL mutex — only one can run inference at a time.
+6. Pending Compose OUTPUT refreshes are deferred while you stay on Infinite Canvas or Edit; they resume when you return to Compose.
+7. The **Library** tab does not load or unload models. Use **Save to library** on Compose, Infinite Canvas, or Edit to keep the current result (no upscale). Import a library still onto a Compose layer, onto Infinite Canvas with **Fit canvas** / **Paste centered** / **Paste in stamp**, or into **Edit**.
+
+Stills live under `library/` (`full/` + `thumbs/` + `index.json`) and survive app restarts. The grid is paged (24 at a time).
 
 #### Load SDXL
 
@@ -387,6 +393,14 @@ Typical uses: outpainting beyond a fixed frame, tiled murals, panoramic scenes, 
 6. **Create** and **Reset** also reset the lazy global blueprint and world-anchored noise field.
 
 Canvas presets and region sizes always stay on the 64 px grid.
+
+#### Import an image onto the canvas
+
+1. Open **Import**.
+2. Choose placement: **Fit canvas** (resize the document around the image, pad unoccupied), **Paste centered** (keep canvas size; scale down if needed), or **Paste in stamp** (contain-fit in the teal region).
+3. Drop a file and press **Import file**, or click a library thumbnail.
+4. Generate regions around or over the imported paint. **Undo** reverses the import.
+5. **Save to library** stores the current canvas pixels (no upscale).
 
 #### Navigate the viewport
 
@@ -489,6 +503,10 @@ Preview JPEGs for the live viewport are cached under `workspace/large_canvas_cac
 - **NVFP4 Maximum** applies real NVFP4 to SDXL; regional compile is skipped for that path. Batched UNet views run one at a time under NVFP4.
 - Read the **Status** line for per-stage timing when tuning speed vs quality.
 
+### 19. Edit Mode
+
+Edit is a separate tab for **segmenting a still into registered layers**, then **glitching a selected layer**. It does not use Flux or SDXL. Load an image, **hover** an object until it glows, then **click** to lift that region onto its own layer. **Exclude (−)** trims the selected layer. Pick an effect from the Xlitch suite, tune the defaults, and **Apply to layer**. Two-image effects (Double Expose, Masked Merge) blend the selection with the rest of the composite or another layer. Save the flattened composite to the library, export a PNG, or upscale 2× with SeedVR2.
+
 ## Project layout
 
 ```
@@ -504,14 +522,20 @@ xwave-composer/
     canvas/                # layers + compositor
     models/                # Flux, SDXL Hyper, SAM2/rembg, LLM, upscaler
     pipeline/session.py    # Compose session orchestration
+    pipeline/edit.py       # Edit-tab document (Base + SAM2 cuts)
+    glitch/                # Xlitch CPU effects (registry + apply-to-layer)
     pipeline/large_canvas.py  # Infinite Canvas session state
     pipeline/region_fill.py   # stamp fill + fused refine
     pipeline/infinite_canvas/ # strength / priming / fuse / photometric
+    library/               # on-disk stills catalog
     style/                 # CSV preset loader + prompt build
-    ui/gradio_app.py       # Gradio UI (Compose + Infinite Canvas tabs)
+    ui/gradio_app.py       # Gradio UI (Compose + Infinite Canvas + Edit + Library)
     ui/large_canvas_tab.py # Infinite Canvas tab builder
-    ui/assets/             # app.css, work_canvas.js, large_canvas.js, tooltips.js
+    ui/edit_tab.py         # Edit tab builder
+    ui/library_tab.py      # Library tab builder
+    ui/assets/             # app.css, work_canvas.js, large_canvas.js, library.js, edit.js, tooltips.js
   workspace/               # runtime layer images
+  library/                 # saved stills (full + thumbs; gitignored)
   exports/                 # 2× exports
   models/                  # local cache / LoRAs / embeddings
 ```

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import threading
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 # Region / canvas sizes must stay multiples of 64 for SDXL latent alignment.
 SIZE_STEP = 64
@@ -24,6 +28,11 @@ CANVAS_PRESETS: dict[str, tuple[int, int]] = {
     "2048×3072": (2048, 3072),
     "3072×2048": (3072, 2048),
 }
+
+IMPORT_FIT = "fit"
+IMPORT_CENTER = "center"
+IMPORT_STAMP = "stamp"
+IMPORT_MODES = (IMPORT_FIT, IMPORT_CENTER, IMPORT_STAMP)
 
 STAMP_ASPECTS: dict[str, tuple[int, int]] = {
     "1:1": (1, 1),
@@ -217,6 +226,9 @@ class LargeCanvasSession:
     undo_image: Image.Image | None = None
     undo_occupied: Image.Image | None = None
     undo_latent: LatentCanvas | None = field(default=None, repr=False)
+    undo_width: int | None = None
+    undo_height: int | None = None
+    undo_stamp: StampRect | None = None
     stamp: StampRect = field(default_factory=StampRect)
     stamp_aspect: str = "1:1"
     style_name: str | None = None
@@ -276,6 +288,9 @@ class LargeCanvasSession:
             self.undo_image = None
             self.undo_occupied = None
             self.undo_latent = None
+            self.undo_width = None
+            self.undo_height = None
+            self.undo_stamp = None
             self.blueprint = None
             self.world_seed = random.randrange(2**31)
             self.world_ox = 0
@@ -300,6 +315,9 @@ class LargeCanvasSession:
             self.undo_image = None
             self.undo_occupied = None
             self.undo_latent = None
+            self.undo_width = None
+            self.undo_height = None
+            self.undo_stamp = None
             self.blueprint = None
             self.world_seed = random.randrange(2**31)
             self.world_ox = 0
@@ -339,6 +357,9 @@ class LargeCanvasSession:
             self.undo_image = None
             self.undo_occupied = None
             self.undo_latent = None
+            self.undo_width = None
+            self.undo_height = None
+            self.undo_stamp = None
             # Invalidate blueprint geometry after expand; regenerate lazily.
             self.blueprint = None
             self.fit_view = True
@@ -391,6 +412,9 @@ class LargeCanvasSession:
             self.undo_image = self.image.copy()
             self.undo_occupied = self.occupied.copy()
             self.undo_latent = self.latent.copy()
+            self.undo_width = self.width
+            self.undo_height = self.height
+            self.undo_stamp = StampRect(*self.stamp.as_tuple())
 
     def undo(self) -> bool:
         with self._lock:
@@ -401,11 +425,19 @@ class LargeCanvasSession:
             self.occupied = self.undo_occupied
             if self.undo_latent is not None:
                 self.latent = self.undo_latent
+            if self.undo_width is not None and self.undo_height is not None:
+                self.width = self.undo_width
+                self.height = self.undo_height
+            if self.undo_stamp is not None:
+                self.stamp = self.undo_stamp
             self.undo_image = None
             self.undo_occupied = None
             self.undo_latent = None
+            self.undo_width = None
+            self.undo_height = None
+            self.undo_stamp = None
             self.rev += 1
-            self.status = "Undid last generation."
+            self.status = "Undid last change."
             return True
 
     def apply_result(self, image: Image.Image, occupied: Image.Image) -> None:
@@ -415,3 +447,136 @@ class LargeCanvasSession:
             self.image = image.convert("RGB")
             self.occupied = occupied.convert("L")
             self.rev += 1
+
+    def import_image(self, image: Image.Image, mode: str = IMPORT_FIT, sdxl: Any = None) -> None:
+        """Paste an RGB still onto the canvas so later stamps can build off it.
+
+        Modes:
+        - ``fit``: resize the canvas up to 64px multiples, center the image,
+          leave padding unoccupied.
+        - ``center``: keep canvas size; scale down only if the image is larger.
+        - ``stamp``: contain-fit inside the current stamp rect, clip to canvas.
+        """
+        if image is None:
+            raise ValueError("Choose an image to import.")
+        rgb = image.convert("RGB")
+        if rgb.width < 1 or rgb.height < 1:
+            raise ValueError("Imported image is empty.")
+        key = str(mode or IMPORT_FIT).strip().lower()
+        if key not in IMPORT_MODES:
+            key = IMPORT_FIT
+
+        self.push_undo()
+        with self._lock:
+            if key == IMPORT_FIT:
+                box = self._import_fit_unlocked(rgb)
+            elif key == IMPORT_CENTER:
+                box = self._import_center_unlocked(rgb)
+            else:
+                box = self._import_stamp_unlocked(rgb)
+            self._invalidate_box_unlocked(box)
+            self.blueprint = None
+            self.fit_view = True
+            self.rev += 1
+            self.status = (
+                f"Imported {rgb.width}×{rgb.height} ({key}) "
+                f"onto {self.width}×{self.height}."
+            )
+
+        if sdxl is not None and getattr(sdxl, "ready", False):
+            try:
+                self._encode_import_latents(sdxl, box)
+            except Exception:  # noqa: BLE001
+                logger.exception("VAE encode after Infinite Canvas import failed")
+
+    def _import_fit_unlocked(self, rgb: Image.Image) -> tuple[int, int, int, int]:
+        iw, ih = rgb.size
+        cw = max(SIZE_STEP, _snap64_up(iw))
+        ch = max(SIZE_STEP, _snap64_up(ih))
+        self.width = cw
+        self.height = ch
+        self.image = Image.new("RGB", (cw, ch), (0, 0, 0))
+        self.occupied = Image.new("L", (cw, ch), 0)
+        self.latent = LatentCanvas.empty(cw, ch)
+        ox = (cw - iw) // 2
+        oy = (ch - ih) // 2
+        box = self._paste_occupied_unlocked(rgb, ox, oy)
+        sw, sh = stamp_size_for_aspect(self.stamp_aspect, min(DEFAULT_STAMP, cw, ch))
+        self.stamp = StampRect(
+            x=ox + iw // 2 - sw // 2,
+            y=oy + ih // 2 - sh // 2,
+            w=sw,
+            h=sh,
+        )
+        self.set_stamp(x=self.stamp.x, y=self.stamp.y, w=self.stamp.w, h=self.stamp.h)
+        return box
+
+    def _import_center_unlocked(self, rgb: Image.Image) -> tuple[int, int, int, int]:
+        iw, ih = rgb.size
+        scale = min(1.0, self.width / iw, self.height / ih)
+        if scale < 1.0:
+            rgb = rgb.resize(
+                (max(1, int(iw * scale)), max(1, int(ih * scale))),
+                Image.Resampling.LANCZOS,
+            )
+            iw, ih = rgb.size
+        ox = (self.width - iw) // 2
+        oy = (self.height - ih) // 2
+        return self._paste_occupied_unlocked(rgb, ox, oy)
+
+    def _import_stamp_unlocked(self, rgb: Image.Image) -> tuple[int, int, int, int]:
+        stamp = self.stamp
+        iw, ih = rgb.size
+        scale = min(stamp.w / max(iw, 1), stamp.h / max(ih, 1))
+        nw = max(1, int(round(iw * scale)))
+        nh = max(1, int(round(ih * scale)))
+        if (nw, nh) != (iw, ih):
+            rgb = rgb.resize((nw, nh), Image.Resampling.LANCZOS)
+            iw, ih = rgb.size
+        ox = stamp.x + (stamp.w - iw) // 2
+        oy = stamp.y + (stamp.h - ih) // 2
+        return self._paste_occupied_unlocked(rgb, ox, oy)
+
+    def _paste_occupied_unlocked(
+        self, rgb: Image.Image, ox: int, oy: int
+    ) -> tuple[int, int, int, int]:
+        iw, ih = rgb.size
+        src_x0 = max(0, -ox)
+        src_y0 = max(0, -oy)
+        dst_x0 = max(0, ox)
+        dst_y0 = max(0, oy)
+        dst_x1 = min(self.width, ox + iw)
+        dst_y1 = min(self.height, oy + ih)
+        if dst_x1 <= dst_x0 or dst_y1 <= dst_y0:
+            raise ValueError("Imported image does not overlap the canvas.")
+        crop = rgb.crop((src_x0, src_y0, src_x0 + (dst_x1 - dst_x0), src_y0 + (dst_y1 - dst_y0)))
+        self.image.paste(crop, (dst_x0, dst_y0))
+        self.occupied.paste(Image.new("L", crop.size, 255), (dst_x0, dst_y0))
+        return dst_x0, dst_y0, crop.size[0], crop.size[1]
+
+    def _invalidate_box_unlocked(self, box: tuple[int, int, int, int]) -> None:
+        x, y, w, h = box
+        lx = x // LATENT_SCALE
+        ly = y // LATENT_SCALE
+        lw = max(1, (x + w + LATENT_SCALE - 1) // LATENT_SCALE - lx)
+        lh = max(1, (y + h + LATENT_SCALE - 1) // LATENT_SCALE - ly)
+        self.latent.invalidate(lx, ly, np.ones((lh, lw), dtype=bool))
+
+    def _encode_import_latents(self, sdxl: Any, box: tuple[int, int, int, int]) -> None:
+        x, y, w, h = box
+        with self._lock:
+            x0 = (x // LATENT_SCALE) * LATENT_SCALE
+            y0 = (y // LATENT_SCALE) * LATENT_SCALE
+            x1 = min(self.width, ((x + w + LATENT_SCALE - 1) // LATENT_SCALE) * LATENT_SCALE)
+            y1 = min(self.height, ((y + h + LATENT_SCALE - 1) // LATENT_SCALE) * LATENT_SCALE)
+            x0 = max(0, x0)
+            y0 = max(0, y0)
+            if x1 - x0 < LATENT_SCALE or y1 - y0 < LATENT_SCALE:
+                return
+            crop = self.image.crop((x0, y0, x1, y1))
+        z = sdxl.encode_to_latents(crop)
+        with self._lock:
+            lx, ly = x0 // LATENT_SCALE, y0 // LATENT_SCALE
+            alpha = np.ones(z.shape[-2:], dtype=np.float32)
+            self.latent.write(lx, ly, z, alpha, seed_mask=np.ones_like(alpha, dtype=bool))
+

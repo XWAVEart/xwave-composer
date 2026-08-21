@@ -540,6 +540,28 @@ class SDXLHyperPipeline:
         out = result.images[0]
         return out.convert("RGB")
 
+    def encode_to_latents(self, image: Image.Image) -> np.ndarray:
+        """VAE-encode RGB to scaled latents ``(4, h/8, w/8)`` float16."""
+        self.ensure_loaded()
+        pipe = self.pipe
+        assert pipe is not None
+        rgb = image.convert("RGB")
+        device = pipe._execution_device
+        try:
+            dtype = next(pipe.unet.parameters()).dtype
+        except StopIteration:
+            dtype = self.dtype
+        image_t = pipe.image_processor.preprocess(rgb).to(device=device, dtype=dtype)
+        try:
+            with torch.no_grad():
+                latents = pipe.vae.encode(image_t).latent_dist.sample()
+                scale = float(getattr(pipe.vae.config, "scaling_factor", 0.18215))
+                latents = latents * scale
+            return latents[0].detach().to(dtype=torch.float16).cpu().numpy()
+        finally:
+            del image_t
+            empty_cache()
+
     def unload(self) -> None:
         pipe = self.pipe
         self.pipe = None

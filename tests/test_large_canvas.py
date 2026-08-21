@@ -33,6 +33,9 @@ from xwave_composer.pipeline.infinite_canvas.strength import (
 )
 from xwave_composer.pipeline.large_canvas import (
     DEFAULT_CANVAS,
+    IMPORT_CENTER,
+    IMPORT_FIT,
+    IMPORT_STAMP,
     LATENT_SCALE,
     SIZE_STEP,
     LargeCanvasSession,
@@ -106,6 +109,46 @@ def test_session_create_expand_reset():
     lc.reset()
     assert lc.image.getpixel((0, 0)) == (0, 0, 0)
     assert lc.occupied.getpixel((0, 0)) == 0
+
+
+def test_import_fit_canvas_pads_and_occupies():
+    lc = LargeCanvasSession(width=1024, height=1024)
+    src = Image.new("RGB", (100, 80), (20, 180, 40))
+    lc.import_image(src, mode=IMPORT_FIT)
+    assert lc.width == 128 and lc.height == 128
+    assert lc.occupied.getextrema()[1] == 255
+    assert lc.occupied.getpixel((14, 24)) == 255
+    assert lc.occupied.getpixel((0, 0)) == 0
+    px = lc.image.getpixel((14, 24))
+    assert px[1] > 100
+    assert lc.undo()
+    assert lc.width == 1024 and lc.height == 1024
+    assert lc.occupied.getpixel((14, 24)) == 0
+
+
+def test_import_center_scales_down_only():
+    lc = LargeCanvasSession(width=256, height=256)
+    src = Image.new("RGB", (512, 256), (200, 30, 30))
+    lc.import_image(src, mode=IMPORT_CENTER)
+    assert lc.width == 256 and lc.height == 256
+    assert lc.occupied.getpixel((128, 64)) == 255
+    assert lc.occupied.getpixel((128, 0)) == 0
+    small = Image.new("RGB", (32, 32), (10, 10, 200))
+    lc.import_image(small, mode=IMPORT_CENTER)
+    assert lc.width == 256
+    cx, cy = 112, 112
+    assert lc.occupied.getpixel((cx, cy)) == 255
+    assert lc.undo()
+
+
+def test_import_stamp_fits_inside_stamp():
+    lc = LargeCanvasSession(width=1024, height=1024)
+    lc.set_stamp(x=64, y=64, w=256, h=256)
+    src = Image.new("RGB", (400, 200), (40, 40, 200))
+    lc.import_image(src, mode=IMPORT_STAMP)
+    assert lc.occupied.getpixel((64, 128)) == 255
+    assert lc.occupied.getpixel((0, 0)) == 0
+    assert lc.width == 1024
 
 
 def test_stamp_can_straddle_edge_but_never_disappear():
