@@ -10,7 +10,7 @@ build/
 .mypy_cache/
 exports/
 workspace/
-library/
+/library/
 models/**
 !models/.gitkeep
 *.safetensors

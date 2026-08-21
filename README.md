@@ -19,7 +19,7 @@ The UI has four tabs. **Compose**, **Infinite Canvas**, and **Edit** are GPU-exc
 |-----|--------|----------|
 | **Compose** | Flux + isolator + SDXL OUTPUT | Multi-layer scenes with live OUTPUT refine |
 | **Infinite Canvas** | SDXL Hyper only | Large flat canvases built from overlapping region stamps |
-| **Edit** | SAM2 isolator | Load a still, click-segment layers, save / export / upscale |
+| **Edit** | SAM2 isolator | Load a still, hover-segment layers, apply Xlitch effects, save / export / upscale |
 | **Library** | none | Browse, name, download, delete, and send saved stills into Compose, Infinite Canvas, or Edit |
 
 Switching between **Compose**, **Infinite Canvas**, and **Edit** unloads the other mode’s models to free VRAM. Opening **Library** does not change the GPU stack.
@@ -371,9 +371,7 @@ Typical uses: outpainting beyond a fixed frame, tiled murals, panoramic scenes, 
 4. Switching back to **Compose** re-enables the Compose stack. Press **Load models** if Flux was unloaded.
 5. Compose live OUTPUT and Infinite Canvas generation share one SDXL mutex — only one can run inference at a time.
 6. Pending Compose OUTPUT refreshes are deferred while you stay on Infinite Canvas or Edit; they resume when you return to Compose.
-7. The **Library** tab does not load or unload models. Use **Save to library** on Compose, Infinite Canvas, or Edit to keep the current result (no upscale). Import a library still onto a Compose layer, onto Infinite Canvas with **Fit canvas** / **Paste centered** / **Paste in stamp**, or into **Edit**.
-
-Stills live under `library/` (`full/` + `thumbs/` + `index.json`) and survive app restarts. The grid is paged (24 at a time).
+7. The **Library** tab does not load or unload models. Use **Save to library** on Compose, Infinite Canvas, or Edit to keep the current result (no upscale). Import a library still onto a Compose layer, onto Infinite Canvas with **Fit canvas** / **Paste centered** / **Paste in stamp**, or into **Edit**. Details: [20. Library](#20-library).
 
 #### Load SDXL
 
@@ -505,7 +503,85 @@ Preview JPEGs for the live viewport are cached under `workspace/large_canvas_cac
 
 ### 19. Edit Mode
 
-Edit is a separate tab for **segmenting a still into registered layers**, then **glitching a selected layer**. It does not use Flux or SDXL. Load an image, **hover** an object until it glows, then **click** to lift that region onto its own layer. **Exclude (−)** trims the selected layer. Pick an effect from the Xlitch suite, tune the defaults, and **Apply to layer**. Two-image effects (Double Expose, Masked Merge) blend the selection with the rest of the composite or another layer. Save the flattened composite to the library, export a PNG, or upscale 2× with SeedVR2.
+Edit is a separate tab for **segmenting a still into registered layers**, then **glitching a selected layer**. It does not use Flux or SDXL. The first hover may load SAM2 (slow once); later hovers reuse the image embedding.
+
+#### Load a still
+
+1. Open the **Edit** tab.
+2. Drop or upload a file under **Import**, then press **Load file**, or click a **library** thumbnail.
+3. The center canvas shows the composite. Layers appear on the right (Base is the punched remainder).
+
+#### Segment with SAM2
+
+1. Set **Mode** to **Include (+)** (default), **Exclude (−)**, or **Off**.
+2. **Hover** an object until it glows teal, then **click** to lift that region onto its own layer. Base is punched so the cut is not duplicated.
+3. **Exclude (−)** trims the selected cut layer (hover the part to remove, then click). Cut an object first.
+4. **Off** ignores canvas clicks.
+5. SAM2 keeps the connected blob under the cursor and drops distant specks. Tiny islands far from the pointer are discarded; a small object you are actually pointing at still selects.
+6. **Undo** reverses the last effect apply, or the last cut / leftover hover mask.
+
+The first hover on a new image can stall while SAM2 loads. Wait for the glow before clicking.
+
+#### Layers
+
+1. Click a card in the stack to select it. Drag non-Base cards to reorder.
+2. Set **Name**, **Visible**, and **Opacity** for the selection.
+3. Delete a cut from the card control. Base cannot be deleted.
+
+#### Xlitch effects
+
+Effects are CPU-only and apply to the **selected layer**. The compact bar sits **under the center image**.
+
+1. Choose a **group**, then an **effect**. Groups: Color and tone, Pixel sorting, Pixelation and stylization, Distortion, Slice and block, Glitch, Blend.
+2. Tune the visible parameters (only the fields for that effect).
+3. Two-image effects (**Double Expose**, **Masked Merge**) show a **secondary** source: **Rest of composite** (default) or another layer.
+4. Some warp/distort effects show **Warp alpha** — the transparency channel is warped with the RGB.
+5. Press **Apply**. RGB is processed; alpha is kept unless Warp alpha is on. Undo snapshots the layer first.
+
+#### Save, export, upscale
+
+1. **Save to library** stores the flattened composite (optional name). No upscale.
+2. **Export PNG** writes a file under `exports/` and offers a download.
+3. **Upscale 2×** runs SeedVR2 (same exclusive subprocess as Compose). GPU must be free.
+
+#### Edit — recommended sequence
+
+1. Load a still from a file or the library.
+2. Hover until the object glows, click to lift it, repeat for other objects.
+3. Select a cut layer, pick an effect under the image, **Apply**.
+4. Save to the library, export PNG, or upscale 2×.
+
+### 20. Library
+
+Library is a GPU-neutral tab for stills saved from Compose, Infinite Canvas, or Edit. Opening it does **not** load or unload models.
+
+Stills live under `library/` (`full/` + `thumbs/` + `index.json`) and survive app restarts. The grid is paged (**24** at a time).
+
+#### Browse and manage
+
+1. Open the **Library** tab.
+2. Click a thumbnail to preview it. Use **Prev** / **Next** to page.
+3. Set **Name** and press **Save name**.
+4. **Download** the full still, or **Delete** it from disk.
+
+#### Send a still into a workspace
+
+1. Select a thumbnail.
+2. **Import to Compose layer** pastes onto the selected Compose layer (same as clicking a picker thumb on Compose).
+3. **Import to Edit** loads it as the Edit document.
+4. For Infinite Canvas, choose placement (**Fit canvas**, **Paste centered**, **Paste in stamp**) then **Import to Infinite Canvas**.
+
+You can also click picker thumbnails in the **Import** panels on Compose, Infinite Canvas, and Edit without opening this tab.
+
+#### Save into the library
+
+Use **Save to library** on:
+
+- **Compose** — current OUTPUT, or WORK if OUTPUT is empty (no upscale)
+- **Infinite Canvas** — current canvas pixels
+- **Edit** — flattened composite
+
+Optional name is stored with the still (max 80 characters).
 
 ## Project layout
 
@@ -527,7 +603,7 @@ xwave-composer/
     pipeline/large_canvas.py  # Infinite Canvas session state
     pipeline/region_fill.py   # stamp fill + fused refine
     pipeline/infinite_canvas/ # strength / priming / fuse / photometric
-    library/               # on-disk stills catalog
+    library/               # stills catalog (store + HTML views)
     style/                 # CSV preset loader + prompt build
     ui/gradio_app.py       # Gradio UI (Compose + Infinite Canvas + Edit + Library)
     ui/large_canvas_tab.py # Infinite Canvas tab builder
@@ -553,6 +629,9 @@ xwave-composer/
 | `sdxl_hyper.preview_scale` | Optional low-res preview scale (unused by the live UI; kept for API/tests) |
 | `sdxl_hyper.settle_debounce_s` | Unused by the live UI (single full refine after debounce) |
 | `isolation.preferred` | `sam2` or `rembg` (default backend; the Layer panel rembg / SAM2 / none selector overrides for Re-cut / import) |
+| `isolation.sam2.min_speckle_px` | Edit hover/click drops disconnected SAM2 islands smaller than this (the blob under the cursor is always kept) |
+| `isolation.sam2.min_speckle_frac` | Same filter as a fraction of image area |
+| `paths.library_dir` | Saved stills (`full/` + `thumbs/` + `index.json`; gitignored) |
 | `llm.model_id` | Qwen2.5-VL-3B-Instruct (vision rewrite) |
 | `style.presets_file` | CSV of style presets (default project root) |
 | `export.upscaler` | `seedvr2` default; export-only subprocess (7B/3B, FP16/FP8) |
