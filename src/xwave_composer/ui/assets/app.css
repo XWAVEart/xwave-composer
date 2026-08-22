@@ -1,23 +1,151 @@
-/* xwave-composer — dark studio theme, dense dual-canvas workspace */
+/* xwave-composer — token-driven studio theme, dense dual-canvas workspace
+   Scheme matrix: [data-mode="dark|light"] × [data-accent="teal|sky|amber|lime|rose|graphite"]
+   Density: [data-density="compact|comfortable"] · Motion: [data-motion="full|reduced"]
+   All attributes are set by settings.js on <html>; :root defaults = dark/teal/compact. */
+
+/* ════════════════════════════════════════════════════════════════════
+   1. DESIGN TOKENS
+   ════════════════════════════════════════════════════════════════════ */
 
 :root {
+  /* type */
+  --xw-font: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --xw-display: "Space Grotesk", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --xw-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --xw-text-xs: 0.62rem;
+  --xw-text-sm: 0.7rem;
+  --xw-text-md: 0.76rem;
+  --xw-text-lg: 0.82rem;
+  --xw-text-xl: 0.92rem;
+  --xw-text-2xl: 1.05rem;
+
+  /* spacing scale */
+  --xw-sp-1: 2px;
+  --xw-sp-2: 4px;
+  --xw-sp-3: 6px;
+  --xw-sp-4: 8px;
+  --xw-sp-5: 12px;
+  --xw-sp-6: 16px;
+
+  /* radii — 3 steps, no others */
+  --xw-radius-sm: 4px;
+  --xw-radius: 6px;
+  --xw-radius-lg: 8px;
+
+  /* control metrics */
+  --xw-ctl-h: 26px;
+  --xw-tab-h: 36px;
+
+  /* surfaces — dark mode (default) */
   --xw-bg: #0a0c0f;
   --xw-panel: #12151a;
   --xw-panel-2: #171b21;
+  --xw-inset: #0c0e12;
+  --xw-canvas-bg: #0e1013;   /* stays dark in both modes (image judging) */
+  --xw-thumb-bg: #0c0e11;
   --xw-border: #232830;
   --xw-border-soft: #1c2128;
   --xw-text: #e6e9ee;
-  --xw-text-dim: #828a98;
-  --xw-accent: #5eead4;
-  --xw-accent-dim: rgba(94, 234, 212, 0.14);
+  --xw-text-dim: #8a919d;
+  --xw-faint: #5c6470;
+  --xw-muted: #9aa3ad;
   --xw-danger: #f87171;
-  --xw-radius: 8px;
-  --xw-radius-sm: 5px;
-  --xw-font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --xw-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --xw-warn: #f59e0b;
+  --xw-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --xw-overlay: rgba(0, 0, 0, 0.4);
+
+  /* accent — teal (default), dark mode values */
+  --xw-accent: #5eead4;
+  --xw-accent-hover: #7ef0dd;
+  --xw-accent-dim: rgba(94, 234, 212, 0.14);
+  --xw-accent-contrast: #06201b;
+  --xw-ok: var(--xw-accent);
+  --xw-focus: var(--xw-accent);
 }
 
-/* ── page chrome ── */
+/* ── accent matrix (dark mode) ── */
+html[data-accent="sky"] {
+  --xw-accent: #7dd3fc; --xw-accent-hover: #a5e0fd;
+  --xw-accent-dim: rgba(125, 211, 252, 0.14); --xw-accent-contrast: #082a3a;
+}
+html[data-accent="amber"] {
+  --xw-accent: #fbbf24; --xw-accent-hover: #fcd34d;
+  --xw-accent-dim: rgba(251, 191, 36, 0.15); --xw-accent-contrast: #3a2a04;
+}
+html[data-accent="lime"] {
+  --xw-accent: #a3e635; --xw-accent-hover: #bef264;
+  --xw-accent-dim: rgba(163, 230, 53, 0.15); --xw-accent-contrast: #243503;
+}
+html[data-accent="rose"] {
+  --xw-accent: #fb7185; --xw-accent-hover: #fda4af;
+  --xw-accent-dim: rgba(251, 113, 133, 0.15); --xw-accent-contrast: #3d0a14;
+}
+html[data-accent="graphite"] {
+  --xw-accent: #a8b0bc; --xw-accent-hover: #c3cad4;
+  --xw-accent-dim: rgba(148, 160, 176, 0.16); --xw-accent-contrast: #161a20;
+}
+
+/* ── light mode surfaces ── */
+html[data-mode="light"] {
+  --xw-bg: #eceef1;
+  --xw-panel: #ffffff;
+  --xw-panel-2: #f4f5f7;
+  --xw-inset: #e4e7eb;
+  --xw-canvas-bg: #14171c;
+  --xw-thumb-bg: #14171c;
+  --xw-border: #d3d8df;
+  --xw-border-soft: #e2e6eb;
+  --xw-text: #1c2129;
+  --xw-text-dim: #5b6470;
+  --xw-faint: #8a93a1;
+  --xw-muted: #6b7480;
+  --xw-danger: #dc2626;
+  --xw-warn: #b45309;
+  --xw-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --xw-overlay: rgba(15, 23, 42, 0.12);
+}
+
+/* ── accent matrix (light mode — deepened for AA contrast) ── */
+html[data-mode="light"][data-accent="teal"] {
+  --xw-accent: #0d9488; --xw-accent-hover: #0f766e;
+  --xw-accent-dim: rgba(13, 148, 136, 0.12); --xw-accent-contrast: #ffffff;
+}
+html[data-mode="light"][data-accent="sky"] {
+  --xw-accent: #0284c7; --xw-accent-hover: #0369a1;
+  --xw-accent-dim: rgba(2, 132, 199, 0.12); --xw-accent-contrast: #ffffff;
+}
+html[data-mode="light"][data-accent="amber"] {
+  --xw-accent: #b45309; --xw-accent-hover: #92400e;
+  --xw-accent-dim: rgba(180, 83, 9, 0.12); --xw-accent-contrast: #ffffff;
+}
+html[data-mode="light"][data-accent="lime"] {
+  --xw-accent: #65a30d; --xw-accent-hover: #4d7c0f;
+  --xw-accent-dim: rgba(101, 163, 13, 0.13); --xw-accent-contrast: #ffffff;
+}
+html[data-mode="light"][data-accent="rose"] {
+  --xw-accent: #e11d48; --xw-accent-hover: #be123c;
+  --xw-accent-dim: rgba(225, 29, 72, 0.1); --xw-accent-contrast: #ffffff;
+}
+html[data-mode="light"][data-accent="graphite"] {
+  --xw-accent: #475569; --xw-accent-hover: #334155;
+  --xw-accent-dim: rgba(71, 85, 105, 0.12); --xw-accent-contrast: #ffffff;
+}
+
+/* ── density ── */
+html[data-density="comfortable"] {
+  --xw-sp-2: 5px;
+  --xw-sp-3: 8px;
+  --xw-sp-4: 10px;
+  --xw-sp-5: 14px;
+  --xw-sp-6: 20px;
+  --xw-ctl-h: 30px;
+  --xw-tab-h: 40px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   2. PAGE CHROME
+   ════════════════════════════════════════════════════════════════════ */
+
 body,
 .gradio-container {
   background: var(--xw-bg) !important;
@@ -32,13 +160,14 @@ html {
 .gradio-container {
   max-width: none !important;
   width: 100% !important;
-  padding: 8px 12px 14px !important;
+  padding: var(--xw-sp-4) var(--xw-sp-5) var(--xw-sp-6) !important;
 }
 
-/* Keep Compose / Edit / Library at studio width; Infinite Canvas uses the full row. */
+/* Keep Compose / Edit / Library / Settings at studio width; Infinite Canvas uses the full row. */
 #xwave-compose-tab,
 #xwave-edit-tab,
-#xwave-library-tab {
+#xwave-library-tab,
+#xwave-settings-tab {
   max-width: 1680px;
   width: 100%;
   margin-left: auto;
@@ -65,11 +194,14 @@ footer {
   pointer-events: none !important;
 }
 
-/* ── flatten Gradio's nested block chrome ── */
-.xwave-app .block,
-.xwave-app .form,
-.xwave-app .styler,
-.xwave-app .gr-group {
+/* ════════════════════════════════════════════════════════════════════
+   3. GRADIO FLATTEN + CONTROL PRIMITIVES
+   ════════════════════════════════════════════════════════════════════ */
+
+.gradio-container .block,
+.gradio-container .form,
+.gradio-container .styler,
+.gradio-container .gr-group {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
@@ -77,483 +209,296 @@ footer {
 }
 
 .xwave-row {
-  gap: 10px !important;
-  margin: 0 0 8px !important;
+  gap: var(--xw-sp-4) !important;
+  margin: 0 0 var(--xw-sp-4) !important;
   align-items: stretch !important;
 }
 
 .xwave-col {
   min-width: 0 !important;
-  gap: 6px !important;
+  gap: var(--xw-sp-3) !important;
 }
 
 /* labels */
-.xwave-app label span,
-.xwave-app .label-wrap span {
-  font-size: 0.7rem !important;
-  font-weight: 600 !important;
+.gradio-container label span,
+.gradio-container .label-wrap span {
+  font-size: var(--xw-text-sm) !important;
+  font-weight: 500 !important;
   letter-spacing: 0.02em;
   color: var(--xw-text-dim) !important;
 }
 
-.xwave-app input,
-.xwave-app textarea,
-.xwave-app select {
+.gradio-container input,
+.gradio-container textarea,
+.gradio-container select {
   background: var(--xw-panel-2) !important;
   border: 1px solid var(--xw-border) !important;
   color: var(--xw-text) !important;
   border-radius: var(--xw-radius-sm) !important;
-  font-size: 0.82rem !important;
+  font-size: var(--xw-text-lg) !important;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.xwave-app input:focus,
-.xwave-app textarea:focus {
+.gradio-container input:focus,
+.gradio-container textarea:focus {
   border-color: var(--xw-accent) !important;
   box-shadow: 0 0 0 1px var(--xw-accent-dim) !important;
 }
 
+/* keyboard focus — visible ring on every interactive element */
+.gradio-container :is(button, input, select, textarea, [tabindex], .xwave-card, .xwave-lib-item):focus-visible {
+  outline: 2px solid var(--xw-focus) !important;
+  outline-offset: 1px !important;
+}
+
 /* buttons */
-.xwave-app button {
+.gradio-container button {
   border-radius: var(--xw-radius-sm) !important;
-  font-weight: 600 !important;
+  font-weight: 500 !important;
   letter-spacing: 0.01em;
   border: 1px solid var(--xw-border) !important;
   background: var(--xw-panel-2) !important;
   color: var(--xw-text) !important;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 
-.xwave-app button:hover {
+.gradio-container button:hover {
   border-color: var(--xw-accent) !important;
 }
 
-.xwave-app button.primary {
+.gradio-container button.primary {
   background: var(--xw-accent) !important;
   border-color: var(--xw-accent) !important;
-  color: #06201b !important;
+  color: var(--xw-accent-contrast) !important;
+  font-weight: 600 !important;
 }
 
-.xwave-app button.primary:hover {
-  filter: brightness(1.08);
+.gradio-container button.primary:hover {
+  background: var(--xw-accent-hover) !important;
+  border-color: var(--xw-accent-hover) !important;
 }
 
-.xwave-app button.stop {
+.gradio-container button.stop {
   background: transparent !important;
-  border-color: rgba(248, 113, 113, 0.4) !important;
+  border-color: color-mix(in srgb, var(--xw-danger) 40%, transparent) !important;
   color: var(--xw-danger) !important;
 }
 
-.xwave-app button.stop:hover {
-  background: rgba(248, 113, 113, 0.12) !important;
+.gradio-container button.stop:hover {
+  background: color-mix(in srgb, var(--xw-danger) 12%, transparent) !important;
   border-color: var(--xw-danger) !important;
 }
 
-/* brand title */
-.xwave-brand-wrap {
-  margin: 0 0 6px !important;
-  padding: 0 !important;
-}
-
-.xwave-brand {
-  margin: 2px 0 8px !important;
-  font-size: 1.15rem !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.42em !important;
-  text-indent: 0.42em !important;
-  text-align: center !important;
-  text-transform: uppercase !important;
-  color: var(--xw-text) !important;
-  opacity: 0.92;
-}
-
-.xwave-import {
-  min-height: 80px !important;
-}
-
-.xwave-cutout-mode {
-  margin: 2px 0 0 !important;
-  padding: 0 !important;
-}
-
-.xwave-cutout-mode .wrap {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  gap: 6px !important;
-  width: 100% !important;
-}
-
-.xwave-cutout-mode label {
-  flex: 1 1 0 !important;
-  justify-content: center !important;
-  margin: 0 !important;
-  padding: 3px 6px !important;
-  font-size: 0.72rem !important;
-  min-height: 26px !important;
-  border: 1px solid var(--xw-border) !important;
-  border-radius: var(--xw-radius-sm) !important;
-  background: var(--xw-panel-2) !important;
-  box-sizing: border-box !important;
-}
-
-/* ── Layer inspector: dense transform strips ── */
-.xwave-xform-strip {
-  align-items: flex-end !important;
-  gap: 4px 6px !important;
-  margin: 0 !important;
-  flex-wrap: wrap !important;
-  overflow: visible !important;
-}
-
-/* Gradio nests Number/Checkbox into one .form — force a horizontal toolbar */
-.xwave-xform-strip > .form,
-.xwave-xform-strip > .block,
-.xwave-xform-strip .form {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: wrap !important;
-  align-items: flex-end !important;
-  gap: 4px 6px !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  overflow: visible !important;
-  width: 100% !important;
-}
-
-.xwave-xform-strip .block,
-.xwave-xform-strip .svelte-90oupt,
-.xwave-xform-strip [data-testid="number"],
-.xwave-xform-strip [data-testid="checkbox"] {
-  flex: 1 1 0 !important;
-  width: auto !important;
-  max-width: none !important;
-  min-width: 48px !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-/* Dedicated flip row: two equal toggles, never clipped */
-.xwave-flip-row .form {
-  flex-wrap: nowrap !important;
-  gap: 8px !important;
-}
-
-.xwave-flip-row .block,
-.xwave-flip-row [data-testid="checkbox"],
-.xwave-flip-row .xwave-mini-check {
-  flex: 1 1 50% !important;
-  max-width: none !important;
-  min-width: 0 !important;
-}
-
-.xwave-flip-row label,
-.xwave-flip-row .label-wrap {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  gap: 6px !important;
-  width: 100% !important;
-  min-height: 26px !important;
-  padding: 2px 8px !important;
-  border: 1px solid var(--xw-border) !important;
-  border-radius: var(--xw-radius-sm) !important;
-  background: var(--xw-panel-2) !important;
-  box-sizing: border-box !important;
-}
-
-.xwave-flip-row input[type="checkbox"] {
-  display: inline-block !important;
-  width: 14px !important;
-  height: 14px !important;
-  min-width: 14px !important;
-  max-width: 14px !important;
-  margin: 0 !important;
-  flex: 0 0 14px !important;
+/* sliders */
+.gradio-container input[type="range"] {
   accent-color: var(--xw-accent) !important;
-}
-
-.xwave-xform-strip .wrap {
-  gap: 0 !important;
-}
-
-.xwave-xform-strip label span,
-.xwave-xform-strip .label-wrap span {
-  font-size: 0.6rem !important;
-  line-height: 1.15 !important;
   margin: 0 !important;
 }
 
-.xwave-mini label span {
-  overflow: visible !important;
-  text-overflow: clip !important;
-  white-space: nowrap !important;
+/* scrollbars */
+.gradio-container ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-.xwave-mini input[type="number"] {
-  padding: 2px 4px !important;
-  font-size: 0.7rem !important;
-  font-family: var(--xw-mono) !important;
-  min-width: 0 !important;
-  width: 100% !important;
-  max-width: none !important;
-  height: 26px !important;
+.gradio-container ::-webkit-scrollbar-thumb {
+  background: var(--xw-border);
+  border-radius: 4px;
 }
 
-.xwave-mini input[type="number"]::-webkit-outer-spin-button,
-.xwave-mini input[type="number"]::-webkit-inner-spin-button {
-  -webkit-appearance: none !important;
-  margin: 0 !important;
+.gradio-container ::-webkit-scrollbar-thumb:hover {
+  background: var(--xw-faint);
 }
 
-.xwave-mini input[type="number"] {
-  -moz-appearance: textfield;
-  appearance: textfield;
+.gradio-container ::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.xwave-xform-strip button[title*="Reset"],
-.xwave-xform-strip .reset-button {
-  display: none !important;
-}
-
-.xwave-mini-check {
-  align-self: flex-end !important;
-  padding-bottom: 2px !important;
-}
-
-/* Keep flip toggles as a horizontal pair, not a stacked column */
-.xwave-mini-check .wrap,
-.xwave-mini-check label {
-  flex-direction: row !important;
-  width: 100% !important;
-}
-
-/* Gradio "info" under checkboxes blows the strip height — hide if present */
-.xwave-mini-check .info,
-.xwave-mini-check .svelte-1gfkn6j,
-.xwave-xform-strip .info {
-  display: none !important;
-}
-
-.xwave-mini-check label,
-.xwave-mini-check .label-wrap {
-  display: flex !important;
-  align-items: center !important;
-  gap: 3px !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  white-space: nowrap !important;
-}
-
-.xwave-mini-check span {
-  font-size: 0.62rem !important;
-  letter-spacing: 0.01em;
-}
-
-.xwave-mini-check input[type="checkbox"] {
-  width: 14px !important;
-  height: 14px !important;
-  margin: 0 !important;
-}
-
-.xwave-mini-slider {
-  min-width: 100px !important;
-  flex: 1 1 120px !important;
-}
-
-.xwave-mini-slider .wrap {
-  gap: 0 !important;
-}
-
-.xwave-mini-slider input[type="number"] {
-  min-width: 40px !important;
-  max-width: 56px !important;
-  padding: 2px 4px !important;
-  font-size: 0.7rem !important;
-  font-family: var(--xw-mono) !important;
-}
-
-.xwave-mini-slider .min_value,
-.xwave-mini-slider .max_value {
-  display: none !important;
-}
-
-.xwave-mini-dd {
-  min-width: 96px !important;
-  flex: 1 1 110px !important;
-}
-
-.xwave-action-row {
-  align-items: center !important;
-  gap: 4px !important;
-  margin: 0 !important;
-  flex-wrap: wrap !important;
-}
-
-.xwave-action-row button {
-  font-size: 0.72rem !important;
-  padding: 2px 8px !important;
-  min-height: 26px !important;
-}
-
-.xwave-iso-row {
-  align-items: center !important;
-  gap: 8px !important;
-  margin: 0 !important;
-  flex-wrap: nowrap !important;
-}
-
-.xwave-iso-row .form,
-.xwave-iso-row .block {
-  margin: 0 !important;
-  padding: 0 !important;
-  flex-shrink: 0 !important;
-}
-
-.xwave-iso-row button {
-  min-height: 28px !important;
-  font-size: 0.72rem !important;
-  padding: 2px 10px !important;
-  flex-shrink: 0 !important;
-}
-
-.xwave-gen-btn {
-  min-width: 36px !important;
-  max-width: 40px !important;
-  padding: 2px 6px !important;
-  font-size: 0.95rem !important;
-  line-height: 1 !important;
-}
-
-/* Seed expands into leftover row width (esp. background: just ▶️ + seed). */
-.xwave-iso-seed,
-.xwave-iso-row .xwave-seed {
-  flex: 1 1 auto !important;
-  min-width: 88px !important;
-  max-width: none !important;
-}
-
-.xwave-iso-seed input,
-.xwave-iso-row .xwave-seed input {
-  width: 100% !important;
-  min-width: 0 !important;
-  font-family: var(--xw-mono) !important;
-  font-size: 0.78rem !important;
-  text-align: right !important;
-}
-
-/* Gradio leaves empty .form shells (grey 1px borders) when every child
-   component is visibility-hidden. Collapse those rows; avoid :has(input,
-   button) — Gradio's CSS rewriter mangles comma lists inside :has(). */
-.xwave-obj-xform:not(:has(.block)),
-.xwave-bg-xform:not(:has(.block)) {
-  display: none !important;
-  height: 0 !important;
-  min-height: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-  border: none !important;
-}
-
-.xwave-xform-strip > .form:not(:has(.block)),
-.xwave-flip-row > .form:not(:has(.block)) {
-  display: none !important;
-  height: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  background: transparent !important;
-}
-
-.xwave-cutout-chk {
-  flex: 0 0 auto !important;
-  width: auto !important;
-  max-width: 44px !important;
-}
-
-.xwave-cutout-chk label,
-.xwave-cutout-chk .label-wrap {
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 0 !important;
-  margin: 0 !important;
-  padding: 2px 8px !important;
-  border: 1px solid var(--xw-border) !important;
-  border-radius: var(--xw-radius-sm) !important;
+/* dropdown menus */
+.gradio-container ul.options {
   background: var(--xw-panel-2) !important;
-  min-height: 28px !important;
-  min-width: 36px !important;
-  white-space: nowrap !important;
-  box-sizing: border-box !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius) !important;
+  box-shadow: var(--xw-shadow) !important;
 }
 
-.xwave-cutout-chk span {
-  font-size: 0.95rem !important;
-  line-height: 1 !important;
-}
-
-.xwave-cutout-chk input[type="checkbox"] {
-  position: absolute !important;
-  opacity: 0 !important;
-  width: 1px !important;
-  height: 1px !important;
-  pointer-events: none !important;
-}
-
-.xwave-cutout-chk:has(input:checked) label,
-.xwave-cutout-chk:has(input:checked) .label-wrap {
-  border-color: var(--xw-accent) !important;
+.gradio-container ul.options li:hover,
+.gradio-container ul.options li.selected {
   background: var(--xw-accent-dim) !important;
 }
 
-.xwave-iso-swatch {
-  flex: 0 0 auto !important;
-  min-width: 36px !important;
-  max-width: 40px !important;
-  padding: 2px 6px !important;
-  font-size: 0.95rem !important;
-  line-height: 1 !important;
+/* progress + toasts stay subtle */
+.gradio-container .progress-text,
+.gradio-container .eta-bar {
+  color: var(--xw-text-dim) !important;
 }
 
-.xwave-compact-radio .wrap {
-  display: flex !important;
-  gap: 6px !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  width: auto !important;
+/* accordion */
+.gradio-container .accordion,
+.gradio-container .label-wrap {
+  background: transparent !important;
 }
 
-.xwave-compact-radio label {
+/* ════════════════════════════════════════════════════════════════════
+   4. HEADER + MAIN TABS
+   ════════════════════════════════════════════════════════════════════ */
+
+.xwave-brand-wrap {
   margin: 0 !important;
+  padding: 0 var(--xw-sp-1) !important;
 }
-.xwave-topbar {
-  margin-bottom: 6px !important;
+
+.xwave-brand {
+  margin: 0 0 var(--xw-sp-2) !important;
+  font-family: var(--xw-display) !important;
+  font-size: var(--xw-text-xl) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.22em !important;
+  text-align: left !important;
+  text-transform: uppercase !important;
+  color: var(--xw-text) !important;
+  opacity: 0.95;
+  line-height: 1.4 !important;
+}
+
+.xwave-brand span {
+  color: var(--xw-accent) !important;
+  transition: color 0.12s ease;
+}
+
+/* ── main tabs (Compose | Infinite Canvas | Edit | Library | Settings) ── */
+.xwave-main-tabs {
+  margin-top: 0 !important;
+}
+
+.xwave-main-tabs > .tab-nav,
+.xwave-main-tabs .tab-container[role="tablist"] {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-start !important;
   align-items: stretch !important;
-  gap: 8px !important;
+  max-width: 1680px !important;
+  width: 100% !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  min-height: var(--xw-tab-h) !important;
+  box-sizing: border-box !important;
+  border-bottom: 1px solid var(--xw-border) !important;
+  margin-bottom: var(--xw-sp-4) !important;
+  gap: var(--xw-sp-1) !important;
+}
+
+.xwave-main-tabs > .tab-nav button,
+.xwave-main-tabs .tab-container[role="tablist"] button {
+  flex: 0 0 auto !important;
+  min-width: 128px !important;
+  box-sizing: border-box !important;
+  font-family: var(--xw-display) !important;
+  font-size: var(--xw-text-md) !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: var(--xw-text-dim) !important;
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  padding: var(--xw-sp-3) var(--xw-sp-5) !important;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease !important;
+}
+
+.xwave-main-tabs > .tab-nav button:hover,
+.xwave-main-tabs .tab-container[role="tablist"] button:hover {
+  color: var(--xw-text) !important;
+  background: var(--xw-accent-dim) !important;
+}
+
+.xwave-main-tabs > .tab-nav button.selected,
+.xwave-main-tabs .tab-container[role="tablist"] button.selected,
+.xwave-main-tabs .tab-container[role="tablist"] button[aria-selected="true"] {
+  color: var(--xw-accent) !important;
+  border-bottom-color: var(--xw-accent) !important;
+  background: transparent !important;
+  font-weight: 600 !important;
+}
+
+/* Keep the five main panels exclusive. Gradio 6 toggles inline display, but
+   IC layout CSS used display:flex !important and leaked into other tabs. */
+.xwave-main-tabs:has(#xwave-compose-tab-button[aria-selected="true"]) #xwave-infinite-canvas-tab,
+.xwave-main-tabs:has(#xwave-compose-tab-button[aria-selected="true"]) #xwave-library-tab,
+.xwave-main-tabs:has(#xwave-compose-tab-button[aria-selected="true"]) #xwave-edit-tab,
+.xwave-main-tabs:has(#xwave-compose-tab-button[aria-selected="true"]) #xwave-settings-tab,
+.xwave-main-tabs:has(#xwave-library-tab-button[aria-selected="true"]) #xwave-infinite-canvas-tab,
+.xwave-main-tabs:has(#xwave-library-tab-button[aria-selected="true"]) #xwave-compose-tab,
+.xwave-main-tabs:has(#xwave-library-tab-button[aria-selected="true"]) #xwave-edit-tab,
+.xwave-main-tabs:has(#xwave-library-tab-button[aria-selected="true"]) #xwave-settings-tab,
+.xwave-main-tabs:has(#xwave-infinite-canvas-tab-button[aria-selected="true"]) #xwave-compose-tab,
+.xwave-main-tabs:has(#xwave-infinite-canvas-tab-button[aria-selected="true"]) #xwave-library-tab,
+.xwave-main-tabs:has(#xwave-infinite-canvas-tab-button[aria-selected="true"]) #xwave-edit-tab,
+.xwave-main-tabs:has(#xwave-infinite-canvas-tab-button[aria-selected="true"]) #xwave-settings-tab,
+.xwave-main-tabs:has(#xwave-edit-tab-button[aria-selected="true"]) #xwave-compose-tab,
+.xwave-main-tabs:has(#xwave-edit-tab-button[aria-selected="true"]) #xwave-infinite-canvas-tab,
+.xwave-main-tabs:has(#xwave-edit-tab-button[aria-selected="true"]) #xwave-library-tab,
+.xwave-main-tabs:has(#xwave-edit-tab-button[aria-selected="true"]) #xwave-settings-tab,
+.xwave-main-tabs:has(#xwave-settings-tab-button[aria-selected="true"]) #xwave-compose-tab,
+.xwave-main-tabs:has(#xwave-settings-tab-button[aria-selected="true"]) #xwave-infinite-canvas-tab,
+.xwave-main-tabs:has(#xwave-settings-tab-button[aria-selected="true"]) #xwave-edit-tab,
+.xwave-main-tabs:has(#xwave-settings-tab-button[aria-selected="true"]) #xwave-library-tab {
+  display: none !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   5. COMPOSE — TOP BAR
+   ════════════════════════════════════════════════════════════════════ */
+
+.xwave-topbar {
+  margin-bottom: var(--xw-sp-3) !important;
+  align-items: stretch !important;
+  gap: var(--xw-sp-4) !important;
 }
 
 .xwave-topbar > .column {
   background: var(--xw-panel) !important;
   border: 1px solid var(--xw-border-soft) !important;
-  border-radius: var(--xw-radius) !important;
-  padding: 4px 8px !important;
+  border-radius: var(--xw-radius-lg) !important;
+  box-shadow: var(--xw-shadow);
+  padding: var(--xw-sp-2) var(--xw-sp-4) !important;
   justify-content: flex-start !important;
-  gap: 4px !important;
+  gap: var(--xw-sp-2) !important;
 }
 
 .xwave-bar-row {
   align-items: center !important;
-  gap: 6px !important;
+  gap: var(--xw-sp-3) !important;
   margin: 0 !important;
 }
 
+.xwave-topbar button.sm {
+  min-height: var(--xw-ctl-h) !important;
+  padding: var(--xw-sp-1) 10px !important;
+}
+
+/* status line — a readout, not an input */
+.xwave-status input,
+.xwave-status textarea {
+  font-family: var(--xw-mono) !important;
+  font-size: var(--xw-text-sm) !important;
+  color: var(--xw-text-dim) !important;
+  background: var(--xw-inset) !important;
+  border: 1px solid var(--xw-border-soft) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  min-height: var(--xw-ctl-h) !important;
+  padding: 3px var(--xw-sp-4) !important;
+  box-shadow: none !important;
+}
+
+/* profile + quality pickers read as segmented controls */
 .xwave-performance-buttons {
   align-items: center !important;
-  gap: 6px !important;
+  gap: 0 !important;
   margin: 0 !important;
   flex-wrap: nowrap !important;
 }
@@ -561,11 +506,57 @@ footer {
 .xwave-performance-buttons > .form {
   margin: 0 !important;
   padding: 0 !important;
+  gap: 0 !important;
+}
+
+/* row gap is 0 so segments join; the VRAM meter keeps its own spacing */
+.xwave-performance-buttons .xwave-vram-block {
+  margin-right: var(--xw-sp-3) !important;
 }
 
 .xwave-performance-buttons button {
   flex: 1 1 0 !important;
   min-width: 64px !important;
+  border-radius: 0 !important;
+  margin-left: -1px !important;
+}
+
+.xwave-performance-buttons button:first-of-type {
+  border-radius: var(--xw-radius-sm) 0 0 var(--xw-radius-sm) !important;
+  margin-left: 0 !important;
+}
+
+.xwave-performance-buttons button:last-of-type {
+  border-radius: 0 var(--xw-radius-sm) var(--xw-radius-sm) 0 !important;
+}
+
+.xwave-performance-buttons button.primary {
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+.xwave-quality-row {
+  justify-content: flex-end !important;
+  gap: 0 !important;
+}
+
+.xwave-quality-row button {
+  border-radius: 0 !important;
+  margin-left: -1px !important;
+}
+
+.xwave-quality-row button:first-of-type {
+  border-radius: var(--xw-radius-sm) 0 0 var(--xw-radius-sm) !important;
+  margin-left: 0 !important;
+}
+
+.xwave-quality-row button:last-of-type {
+  border-radius: 0 var(--xw-radius-sm) var(--xw-radius-sm) 0 !important;
+}
+
+.xwave-quality-row button.primary {
+  position: relative !important;
+  z-index: 1 !important;
 }
 
 /* VRAM meter — sits left of BF16/MXFP8/NVFP4; Gradio HTML
@@ -589,7 +580,7 @@ footer {
 .xwave-vram {
   display: inline-flex !important;
   align-items: center;
-  gap: 6px;
+  gap: var(--xw-sp-3);
   line-height: 1;
   width: auto !important;
   max-width: 130px !important;
@@ -599,7 +590,7 @@ footer {
   width: 56px;
   height: 6px;
   border-radius: 3px;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--xw-inset);
   border: 1px solid var(--xw-border-soft);
   overflow: hidden;
 }
@@ -611,11 +602,11 @@ footer {
 }
 
 .xwave-vram-fill.is-ok {
-  background: var(--xw-accent);
+  background: var(--xw-ok);
 }
 
 .xwave-vram-fill.is-warn {
-  background: #f59e0b;
+  background: var(--xw-warn);
 }
 
 .xwave-vram-fill.is-hot {
@@ -624,96 +615,9 @@ footer {
 
 .xwave-vram-label {
   font-family: var(--xw-mono);
-  font-size: 0.62rem;
+  font-size: var(--xw-text-xs);
   color: var(--xw-text-dim);
   white-space: nowrap;
-}
-
-.xwave-status input,
-.xwave-status textarea {
-  font-family: var(--xw-mono) !important;
-  font-size: 0.68rem !important;
-  color: var(--xw-text-dim) !important;
-  background: rgba(0, 0, 0, 0.25) !important;
-  border: 1px solid var(--xw-border-soft) !important;
-  min-height: 28px !important;
-  padding: 3px 8px !important;
-}
-
-.xwave-topbar button.sm {
-  min-height: 28px !important;
-  padding: 2px 10px !important;
-}
-
-/* ── canvases: flush top, perfectly side by side ── */
-.xwave-canvases {
-  align-items: flex-start !important;
-}
-
-.xwave-work-grid-bar {
-  gap: 0.4rem !important;
-  margin-top: 0.35rem !important;
-  align-items: end !important;
-}
-
-.xwave-work-grid-bar .label-wrap,
-.xwave-work-grid-bar label {
-  font-size: 0.72rem !important;
-  opacity: 0.85;
-}
-
-.xwave-work-grid-state {
-  display: none !important;
-  height: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-}
-
-.xwave-canvas-frame {
-  background: #0e1013 !important;
-  border: 1px solid var(--xw-border) !important;
-  border-radius: var(--xw-radius) !important;
-  overflow: hidden;
-  line-height: 0;
-  min-height: 300px;
-  padding: 0 !important;
-}
-
-#xwave-work-root {
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  line-height: 0;
-}
-
-#xwave-work-canvas {
-  display: block;
-  width: 100%;
-  cursor: grab;
-  touch-action: none;
-}
-
-#xwave-work-canvas:active {
-  cursor: grabbing;
-}
-
-/* OUTPUT image fills its frame edge to edge */
-.xwave-out-img {
-  background: #0e1013 !important;
-  border: none !important;
-  min-height: 300px;
-}
-
-.xwave-out-img .image-container,
-.xwave-out-img img {
-  background: #0e1013 !important;
-  object-fit: contain !important;
-  border-radius: 0 !important;
-}
-
-.xwave-out-img [data-testid="image"] {
-  border: none !important;
 }
 
 /* knob strip — centered in its panel, spread across the width */
@@ -755,7 +659,7 @@ footer {
   flex-wrap: nowrap !important;
   align-items: center !important;
   justify-content: space-between !important;
-  gap: 12px !important;
+  gap: var(--xw-sp-5) !important;
   width: 100% !important;
   flex: 1 1 auto !important;
   min-width: 0 !important;
@@ -786,25 +690,25 @@ footer {
 
 .xwave-knob .label-wrap,
 .xwave-knob span[data-testid="block-info"] {
-  font-size: 0.7rem !important;
+  font-size: var(--xw-text-sm) !important;
   line-height: 1.15 !important;
-  margin: 0 0 2px !important;
+  margin: 0 0 var(--xw-sp-1) !important;
   padding: 0 !important;
   white-space: nowrap !important;
 }
 
 .xwave-knob .wrap {
-  gap: 2px !important;
+  gap: var(--xw-sp-1) !important;
 }
 
 .xwave-knob input[type="number"] {
-  padding: 3px 6px !important;
-  font-size: 0.76rem !important;
+  padding: 3px var(--xw-sp-3) !important;
+  font-size: var(--xw-text-md) !important;
   font-family: var(--xw-mono) !important;
   width: 100% !important;
   min-width: 0 !important;
   max-width: 64px !important;
-  min-height: 28px !important;
+  min-height: var(--xw-ctl-h) !important;
   box-sizing: border-box !important;
 }
 
@@ -850,30 +754,108 @@ footer {
   display: none !important;
 }
 
-/* ── bottom: layers | panels ── */
+/* ════════════════════════════════════════════════════════════════════
+   6. COMPOSE — CANVASES
+   ════════════════════════════════════════════════════════════════════ */
+
+.xwave-canvases {
+  align-items: flex-start !important;
+}
+
+.xwave-canvas-frame {
+  background: var(--xw-canvas-bg) !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius-lg) !important;
+  overflow: hidden;
+  line-height: 0;
+  min-height: 300px;
+  padding: 0 !important;
+}
+
+#xwave-work-root {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+}
+
+#xwave-work-canvas {
+  display: block;
+  width: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+#xwave-work-canvas:active {
+  cursor: grabbing;
+}
+
+/* OUTPUT image fills its frame edge to edge */
+.xwave-out-img {
+  background: var(--xw-canvas-bg) !important;
+  border: none !important;
+  min-height: 300px;
+}
+
+.xwave-out-img .image-container,
+.xwave-out-img img {
+  background: var(--xw-canvas-bg) !important;
+  object-fit: contain !important;
+  border-radius: 0 !important;
+}
+
+.xwave-out-img [data-testid="image"] {
+  border: none !important;
+}
+
+.xwave-work-grid-bar {
+  gap: var(--xw-sp-3) !important;
+  margin-top: var(--xw-sp-3) !important;
+  align-items: end !important;
+}
+
+.xwave-work-grid-bar .label-wrap,
+.xwave-work-grid-bar label {
+  font-size: var(--xw-text-sm) !important;
+  opacity: 0.85;
+}
+
+.xwave-work-grid-state {
+  display: none !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   7. COMPOSE — LAYERS COLUMN
+   ════════════════════════════════════════════════════════════════════ */
+
 .xwave-bottom {
   margin-top: 0 !important;
 }
 
 .xwave-section-head {
-  font-size: 0.64rem !important;
-  font-weight: 700 !important;
+  font-family: var(--xw-display) !important;
+  font-size: var(--xw-text-xs) !important;
+  font-weight: 600 !important;
   letter-spacing: 0.14em !important;
   text-transform: uppercase !important;
-  color: var(--xw-text-dim) !important;
-  margin: 0 0 2px 1px !important;
+  color: var(--xw-faint) !important;
+  margin: 0 0 var(--xw-sp-1) 1px !important;
 }
 
 .xwave-layers-head {
   align-items: center !important;
   justify-content: space-between !important;
-  gap: 6px !important;
+  gap: var(--xw-sp-3) !important;
   margin: 0 !important;
 }
 
 .xwave-add-btn {
-  font-size: 0.72rem !important;
-  padding: 2px 10px !important;
+  font-size: var(--xw-text-sm) !important;
+  padding: var(--xw-sp-1) 10px !important;
   min-height: 24px !important;
 }
 
@@ -882,16 +864,136 @@ footer {
   width: 100%;
 }
 
+#xwave-layer-stack,
+#xwave-edit-layer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding-right: var(--xw-sp-1);
+}
+
+.xwave-card {
+  display: flex;
+  align-items: center;
+  gap: var(--xw-sp-4);
+  padding: var(--xw-sp-2) var(--xw-sp-3);
+  background: var(--xw-panel);
+  border: 1px solid var(--xw-border-soft);
+  border-radius: var(--xw-radius);
+  cursor: pointer;
+  color: var(--xw-text);
+  user-select: none;
+  transition: border-color 0.1s ease, background 0.1s ease, box-shadow 0.1s ease;
+  line-height: 1.3;
+}
+
+.xwave-card:hover {
+  background: var(--xw-panel-2);
+  border-color: var(--xw-border);
+}
+
+.xwave-card.is-selected {
+  border-color: var(--xw-accent);
+  background: var(--xw-accent-dim);
+  box-shadow: inset 2px 0 0 var(--xw-accent);
+}
+
+.xwave-card.is-muted {
+  opacity: 0.55;
+}
+
+.xwave-card.is-muted .xwave-card-text {
+  font-style: italic;
+  color: var(--xw-muted);
+}
+
+.xwave-card.is-hidden {
+  opacity: 0.45;
+}
+
+.xwave-card.is-hidden .xwave-thumb {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
+.xwave-card.is-hidden .xwave-card-text {
+  color: var(--xw-muted);
+}
+
+.xwave-card.is-dragging {
+  opacity: 0.4;
+}
+
+.xwave-card.is-over {
+  border-color: var(--xw-warn);
+}
+
+.xwave-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--xw-radius-sm);
+  background: var(--xw-thumb-bg) center / cover no-repeat;
+  border: 1px solid var(--xw-border-soft);
+  flex-shrink: 0;
+}
+
+.xwave-card-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--xw-text-sm);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.xwave-card.is-empty .xwave-card-text {
+  color: var(--xw-text-dim);
+  font-style: italic;
+}
+
+.xwave-bg-tag {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--xw-text-dim);
+  border: 1px solid var(--xw-border);
+  border-radius: 3px;
+  padding: 1px var(--xw-sp-2);
+  flex-shrink: 0;
+}
+
+.xwave-del {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--xw-radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--xw-text-dim);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.xwave-del:hover {
+  color: var(--xw-danger);
+  border-color: color-mix(in srgb, var(--xw-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--xw-danger) 10%, transparent);
+}
+
 /* Canvas size dropdown + Apply share one bordered control box */
 .xwave-canvas-size {
-  margin-top: 8px !important;
+  margin-top: var(--xw-sp-4) !important;
   align-items: stretch !important;
   gap: 0 !important;
   flex-wrap: nowrap !important;
   background: var(--xw-panel-2) !important;
   border: 1px solid var(--xw-border-soft) !important;
-  border-radius: var(--xw-radius-sm) !important;
-  padding: 4px 6px 5px !important;
+  border-radius: var(--xw-radius) !important;
+  padding: var(--xw-sp-2) var(--xw-sp-3) !important;
   overflow: hidden !important;
 }
 
@@ -916,29 +1018,439 @@ footer {
 
 .xwave-canvas-size .label-wrap,
 .xwave-canvas-size span[data-testid="block-info"] {
-  font-size: 0.66rem !important;
-  margin: 0 0 2px !important;
+  font-size: var(--xw-text-xs) !important;
+  margin: 0 0 var(--xw-sp-1) !important;
   padding: 0 !important;
   line-height: 1.1 !important;
 }
 
 .xwave-canvas-apply {
   align-self: flex-end !important;
-  margin: 0 0 1px 6px !important;
-  min-height: 28px !important;
+  margin: 0 0 1px var(--xw-sp-3) !important;
+  min-height: var(--xw-ctl-h) !important;
   min-width: 56px !important;
-  padding: 2px 10px !important;
-  font-size: 0.72rem !important;
+  padding: var(--xw-sp-1) 10px !important;
+  font-size: var(--xw-text-sm) !important;
   flex-shrink: 0 !important;
 }
 
+/* ════════════════════════════════════════════════════════════════════
+   8. COMPOSE — PROPERTY PANELS
+   ════════════════════════════════════════════════════════════════════ */
+
+/* property panels: one soft panel per column, no nested borders */
+.xwave-props-grid {
+  gap: var(--xw-sp-4) !important;
+  align-items: stretch !important;
+}
+
+.xwave-panel {
+  background: var(--xw-panel) !important;
+  border: 1px solid var(--xw-border-soft) !important;
+  border-radius: var(--xw-radius-lg) !important;
+  box-shadow: var(--xw-shadow);
+  padding: var(--xw-sp-3) var(--xw-sp-4) var(--xw-sp-4) !important;
+  gap: var(--xw-sp-2) !important;
+}
+
+.xwave-panel > .form,
+.xwave-panel > .block {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.xwave-import {
+  min-height: 80px !important;
+}
+
+.xwave-raw-view {
+  border: 1px dashed var(--xw-border) !important;
+  border-radius: var(--xw-radius) !important;
+}
+
+.xwave-raw-view img {
+  cursor: crosshair !important;
+}
+
+.xwave-built-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--xw-sp-2);
+}
+
+/* ── Layer inspector: dense transform strips ── */
+.xwave-xform-strip {
+  align-items: flex-end !important;
+  gap: var(--xw-sp-2) var(--xw-sp-3) !important;
+  margin: 0 !important;
+  flex-wrap: wrap !important;
+  overflow: visible !important;
+}
+
+/* Gradio nests Number/Checkbox into one .form — force a horizontal toolbar */
+.xwave-xform-strip > .form,
+.xwave-xform-strip > .block,
+.xwave-xform-strip .form {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: flex-end !important;
+  gap: var(--xw-sp-2) var(--xw-sp-3) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: visible !important;
+  width: 100% !important;
+}
+
+.xwave-xform-strip .block,
+.xwave-xform-strip .svelte-90oupt,
+.xwave-xform-strip [data-testid="number"],
+.xwave-xform-strip [data-testid="checkbox"] {
+  flex: 1 1 0 !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 48px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Dedicated flip row: two equal toggles, never clipped */
+.xwave-flip-row .form {
+  flex-wrap: nowrap !important;
+  gap: var(--xw-sp-4) !important;
+}
+
+.xwave-flip-row .block,
+.xwave-flip-row [data-testid="checkbox"],
+.xwave-flip-row .xwave-mini-check {
+  flex: 1 1 50% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+
+.xwave-flip-row label,
+.xwave-flip-row .label-wrap {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: var(--xw-sp-3) !important;
+  width: 100% !important;
+  min-height: var(--xw-ctl-h) !important;
+  padding: var(--xw-sp-1) var(--xw-sp-4) !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  background: var(--xw-panel-2) !important;
+  box-sizing: border-box !important;
+}
+
+.xwave-flip-row input[type="checkbox"] {
+  display: inline-block !important;
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  max-width: 14px !important;
+  margin: 0 !important;
+  flex: 0 0 14px !important;
+  accent-color: var(--xw-accent) !important;
+}
+
+.xwave-xform-strip .wrap {
+  gap: 0 !important;
+}
+
+.xwave-xform-strip label span,
+.xwave-xform-strip .label-wrap span {
+  font-size: var(--xw-text-xs) !important;
+  line-height: 1.15 !important;
+  margin: 0 !important;
+}
+
+.xwave-mini label span {
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: nowrap !important;
+}
+
+.xwave-mini input[type="number"] {
+  padding: var(--xw-sp-1) var(--xw-sp-2) !important;
+  font-size: var(--xw-text-sm) !important;
+  font-family: var(--xw-mono) !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: var(--xw-ctl-h) !important;
+}
+
+.xwave-mini input[type="number"]::-webkit-outer-spin-button,
+.xwave-mini input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+
+.xwave-mini input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.xwave-xform-strip button[title*="Reset"],
+.xwave-xform-strip .reset-button {
+  display: none !important;
+}
+
+.xwave-mini-check {
+  align-self: flex-end !important;
+  padding-bottom: var(--xw-sp-1) !important;
+}
+
+/* Keep flip toggles as a horizontal pair, not a stacked column */
+.xwave-mini-check .wrap,
+.xwave-mini-check label {
+  flex-direction: row !important;
+  width: 100% !important;
+}
+
+/* Gradio "info" under checkboxes blows the strip height — hide if present */
+.xwave-mini-check .info,
+.xwave-mini-check .svelte-1gfkn6j,
+.xwave-xform-strip .info {
+  display: none !important;
+}
+
+.xwave-mini-check label,
+.xwave-mini-check .label-wrap {
+  display: flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+}
+
+.xwave-mini-check span {
+  font-size: var(--xw-text-xs) !important;
+  letter-spacing: 0.01em;
+}
+
+.xwave-mini-check input[type="checkbox"] {
+  width: 14px !important;
+  height: 14px !important;
+  margin: 0 !important;
+  accent-color: var(--xw-accent) !important;
+}
+
+.xwave-mini-slider {
+  min-width: 100px !important;
+  flex: 1 1 120px !important;
+}
+
+.xwave-mini-slider .wrap {
+  gap: 0 !important;
+}
+
+.xwave-mini-slider input[type="number"] {
+  min-width: 40px !important;
+  max-width: 56px !important;
+  padding: var(--xw-sp-1) var(--xw-sp-2) !important;
+  font-size: var(--xw-text-sm) !important;
+  font-family: var(--xw-mono) !important;
+}
+
+.xwave-mini-slider .min_value,
+.xwave-mini-slider .max_value {
+  display: none !important;
+}
+
+.xwave-mini-dd {
+  min-width: 96px !important;
+  flex: 1 1 110px !important;
+}
+
+.xwave-action-row {
+  align-items: center !important;
+  gap: var(--xw-sp-2) !important;
+  margin: 0 !important;
+  flex-wrap: wrap !important;
+}
+
+.xwave-action-row button {
+  font-size: var(--xw-text-sm) !important;
+  padding: var(--xw-sp-1) var(--xw-sp-4) !important;
+  min-height: var(--xw-ctl-h) !important;
+}
+
+/* Gradio leaves empty .form shells (grey 1px borders) when every child
+   component is visibility-hidden. Collapse those rows; avoid :has(input,
+   button) — Gradio's CSS rewriter mangles comma lists inside :has(). */
+.xwave-obj-xform:not(:has(.block)),
+.xwave-bg-xform:not(:has(.block)) {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: none !important;
+}
+
+.xwave-xform-strip > .form:not(:has(.block)),
+.xwave-flip-row > .form:not(:has(.block)) {
+  display: none !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+}
+
+/* ── iso row: cutout toggle, backdrop swatches, generate, seed ── */
+.xwave-iso-row {
+  align-items: center !important;
+  gap: var(--xw-sp-4) !important;
+  margin: 0 !important;
+  flex-wrap: nowrap !important;
+}
+
+.xwave-iso-row .form,
+.xwave-iso-row .block {
+  margin: 0 !important;
+  padding: 0 !important;
+  flex-shrink: 0 !important;
+}
+
+.xwave-iso-row button {
+  min-height: var(--xw-ctl-h) !important;
+  font-size: var(--xw-text-sm) !important;
+  padding: var(--xw-sp-1) 10px !important;
+  flex-shrink: 0 !important;
+}
+
+.xwave-cutout-chk {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  max-width: 44px !important;
+}
+
+.xwave-cutout-chk label,
+.xwave-cutout-chk .label-wrap {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+  margin: 0 !important;
+  padding: var(--xw-sp-1) var(--xw-sp-4) !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  background: var(--xw-panel-2) !important;
+  min-height: var(--xw-ctl-h) !important;
+  min-width: 36px !important;
+  white-space: nowrap !important;
+  box-sizing: border-box !important;
+  color: var(--xw-text-dim) !important;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease !important;
+}
+
+.xwave-cutout-chk span {
+  font-size: 0.95rem !important;
+  line-height: 1 !important;
+}
+
+.xwave-cutout-chk input[type="checkbox"] {
+  position: absolute !important;
+  opacity: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  pointer-events: none !important;
+}
+
+.xwave-cutout-chk:has(input:checked) label,
+.xwave-cutout-chk:has(input:checked) .label-wrap {
+  border-color: var(--xw-accent) !important;
+  background: var(--xw-accent-dim) !important;
+  color: var(--xw-accent) !important;
+}
+
+.xwave-iso-swatch {
+  flex: 0 0 auto !important;
+  min-width: 36px !important;
+  max-width: 40px !important;
+  padding: var(--xw-sp-1) var(--xw-sp-3) !important;
+  font-size: 0.95rem !important;
+  line-height: 1 !important;
+}
+
+/* Seed expands into leftover row width (esp. background: just ▶ + seed). */
+.xwave-iso-seed,
+.xwave-iso-row .xwave-seed {
+  flex: 1 1 auto !important;
+  min-width: 88px !important;
+  max-width: none !important;
+}
+
+.xwave-iso-seed input,
+.xwave-iso-row .xwave-seed input {
+  width: 100% !important;
+  min-width: 0 !important;
+  font-family: var(--xw-mono) !important;
+  font-size: var(--xw-text-md) !important;
+  text-align: right !important;
+}
+
+.xwave-seed input {
+  font-family: var(--xw-mono) !important;
+  font-size: var(--xw-text-md) !important;
+  text-align: center;
+}
+
+/* cutout mode radio — segmented tri-state */
+.xwave-cutout-mode {
+  margin: var(--xw-sp-1) 0 0 !important;
+  padding: 0 !important;
+}
+
+.xwave-cutout-mode .wrap {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: var(--xw-sp-3) !important;
+  width: 100% !important;
+}
+
+.xwave-cutout-mode label {
+  flex: 1 1 0 !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  padding: 3px var(--xw-sp-3) !important;
+  font-size: var(--xw-text-sm) !important;
+  min-height: var(--xw-ctl-h) !important;
+  border: 1px solid var(--xw-border) !important;
+  border-radius: var(--xw-radius-sm) !important;
+  background: var(--xw-panel-2) !important;
+  box-sizing: border-box !important;
+}
+
+.xwave-compact-radio .wrap {
+  display: flex !important;
+  gap: var(--xw-sp-3) !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  width: auto !important;
+}
+
+.xwave-compact-radio label {
+  margin: 0 !important;
+}
+
+/* ── style seed + flipbook rows ── */
 .xwave-seed-row {
   align-items: end;
 }
 
 .xwave-style-seed {
   align-items: center !important;
-  gap: 6px !important;
+  gap: var(--xw-sp-3) !important;
   margin: 0 !important;
   flex-wrap: nowrap !important;
 }
@@ -959,15 +1471,15 @@ footer {
   width: 100% !important;
   min-width: 0 !important;
   font-family: var(--xw-mono) !important;
-  font-size: 0.78rem !important;
+  font-size: var(--xw-text-md) !important;
   text-align: right !important;
 }
 
 .xwave-roll-seed {
   min-width: 36px !important;
   max-width: 40px !important;
-  padding: 2px 6px !important;
-  min-height: 28px !important;
+  padding: var(--xw-sp-1) var(--xw-sp-3) !important;
+  min-height: var(--xw-ctl-h) !important;
   font-size: 0.95rem !important;
   line-height: 1 !important;
   flex-shrink: 0 !important;
@@ -975,13 +1487,13 @@ footer {
 
 .xwave-flipbook-seed {
   align-items: center !important;
-  gap: 6px !important;
-  margin: 4px 0 !important;
+  gap: var(--xw-sp-3) !important;
+  margin: var(--xw-sp-2) 0 !important;
 }
 
 .xwave-flipbook-seed-hint {
   margin: 0 !important;
-  font-size: 0.68rem !important;
+  font-size: var(--xw-text-sm) !important;
   color: var(--xw-text-dim) !important;
   line-height: 1.2 !important;
 }
@@ -990,282 +1502,106 @@ footer {
 .xwave-flipbook-dice {
   min-width: 36px !important;
   max-width: 40px !important;
-  padding: 2px 6px !important;
-  min-height: 28px !important;
+  padding: var(--xw-sp-1) var(--xw-sp-3) !important;
+  min-height: var(--xw-ctl-h) !important;
   font-size: 0.95rem !important;
   line-height: 1 !important;
 }
 
-
-.xwave-built-prompt {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.xwave-text-dim {
+  color: var(--xw-text-dim) !important;
+  font-size: var(--xw-text-sm) !important;
+  margin: 0 0 var(--xw-sp-2) !important;
+  line-height: 1.3 !important;
 }
 
-#xwave-layer-stack,
-#xwave-edit-layer-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  max-height: 46vh;
-  overflow-y: auto;
-  padding-right: 2px;
+/* ════════════════════════════════════════════════════════════════════
+   9. ICONS — CSS mask layer (emoji text stays in DOM for a11y/tooltips)
+   ════════════════════════════════════════════════════════════════════ */
+
+.xwave-gen-btn,
+.xwave-roll-seed,
+.xwave-flipbook-lock,
+.xwave-flipbook-dice,
+.xwave-iso-swatch {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 0 !important;
 }
 
-.xwave-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 7px;
-  background: var(--xw-panel);
-  border: 1px solid var(--xw-border-soft);
-  border-radius: var(--xw-radius-sm);
-  cursor: pointer;
-  color: var(--xw-text);
-  user-select: none;
-  transition: border-color 0.1s ease, background 0.1s ease;
-  line-height: 1.3;
+.xwave-gen-btn::before,
+.xwave-roll-seed::before,
+.xwave-flipbook-lock::before,
+.xwave-flipbook-dice::before,
+.xwave-cutout-chk label::before,
+.xwave-cutout-chk .label-wrap::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  background: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
 }
 
-.xwave-card:hover {
-  background: var(--xw-panel-2);
-  border-color: var(--xw-border);
+/* play — generate layer */
+.xwave-gen-btn::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 4.9c0-1.1 1.2-1.8 2.2-1.2l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.2-.1-2.2-1.2V4.9z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 4.9c0-1.1 1.2-1.8 2.2-1.2l11 6.6c1 .6 1 2 0 2.6l-11 6.6c-1 .6-2.2-.1-2.2-1.2V4.9z'/%3E%3C/svg%3E");
 }
 
-.xwave-card.is-selected {
-  border-color: var(--xw-accent);
-  background: var(--xw-accent-dim);
+/* dice — random seed */
+.xwave-roll-seed::before,
+.xwave-flipbook-dice::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3' y='3' width='18' height='18' rx='4' fill='none' stroke='black' stroke-width='2'/%3E%3Ccircle cx='8.4' cy='8.4' r='1.6' fill='black'/%3E%3Ccircle cx='15.6' cy='8.4' r='1.6' fill='black'/%3E%3Ccircle cx='12' cy='12' r='1.6' fill='black'/%3E%3Ccircle cx='8.4' cy='15.6' r='1.6' fill='black'/%3E%3Ccircle cx='15.6' cy='15.6' r='1.6' fill='black'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3' y='3' width='18' height='18' rx='4' fill='none' stroke='black' stroke-width='2'/%3E%3Ccircle cx='8.4' cy='8.4' r='1.6' fill='black'/%3E%3Ccircle cx='15.6' cy='8.4' r='1.6' fill='black'/%3E%3Ccircle cx='12' cy='12' r='1.6' fill='black'/%3E%3Ccircle cx='8.4' cy='15.6' r='1.6' fill='black'/%3E%3Ccircle cx='15.6' cy='15.6' r='1.6' fill='black'/%3E%3C/svg%3E");
 }
 
-.xwave-card.is-muted {
-  opacity: 0.55;
+/* lock — flipbook fixed seed */
+.xwave-flipbook-lock::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='5' y='11' width='14' height='9' rx='2' fill='black'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4' fill='none' stroke='black' stroke-width='2'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='5' y='11' width='14' height='9' rx='2' fill='black'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4' fill='none' stroke='black' stroke-width='2'/%3E%3C/svg%3E");
 }
 
-.xwave-card.is-muted .xwave-card-text {
-  font-style: italic;
-  color: var(--xw-muted, #9aa3ad);
+/* scissors — cutout after generate */
+.xwave-cutout-chk label::before,
+.xwave-cutout-chk .label-wrap::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='6' cy='6' r='3' fill='none' stroke='black' stroke-width='2'/%3E%3Ccircle cx='6' cy='18' r='3' fill='none' stroke='black' stroke-width='2'/%3E%3Cpath d='M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='6' cy='6' r='3' fill='none' stroke='black' stroke-width='2'/%3E%3Ccircle cx='6' cy='18' r='3' fill='none' stroke='black' stroke-width='2'/%3E%3Cpath d='M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
 }
 
-.xwave-card.is-hidden {
-  opacity: 0.45;
+.xwave-cutout-chk span {
+  font-size: 0 !important;
 }
 
-.xwave-card.is-hidden .xwave-thumb {
-  filter: grayscale(1);
-  opacity: 0.55;
-}
-
-.xwave-card.is-hidden .xwave-card-text {
-  color: var(--xw-muted, #9aa3ad);
-}
-
-.xwave-card.is-dragging {
-  opacity: 0.4;
-}
-
-.xwave-card.is-over {
-  border-color: #f59e0b;
-}
-
-.xwave-thumb {
-  width: 30px;
-  height: 30px;
-  border-radius: 4px;
-  background: #0c0e11 center / cover no-repeat;
-  border: 1px solid var(--xw-border-soft);
-  flex-shrink: 0;
-}
-
-.xwave-card-text {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.72rem;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.xwave-card.is-empty .xwave-card-text {
-  color: var(--xw-text-dim);
-  font-style: italic;
-}
-
-.xwave-bg-tag {
-  font-size: 0.58rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--xw-text-dim);
-  border: 1px solid var(--xw-border);
+/* isolation backdrop — real swatch chips instead of emoji squares */
+.xwave-iso-swatch::before {
+  content: "";
+  width: 12px;
+  height: 12px;
   border-radius: 3px;
-  padding: 1px 4px;
-  flex-shrink: 0;
+  flex: 0 0 12px;
 }
 
-.xwave-del {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--xw-text-dim);
-  font-size: 0.95rem;
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
+.xwave-iso-white::before {
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.35);
 }
 
-.xwave-del:hover {
-  color: var(--xw-danger);
-  border-color: rgba(248, 113, 113, 0.4);
-  background: rgba(248, 113, 113, 0.1);
+.xwave-iso-black::before {
+  background: #0b0d10;
+  border: 1px solid rgba(255, 255, 255, 0.35);
 }
 
-/* property panels: one soft panel per column, no nested borders */
-.xwave-props-grid {
-  gap: 10px !important;
-  align-items: stretch !important;
-}
+/* ════════════════════════════════════════════════════════════════════
+   10. INFINITE CANVAS TAB
+   ════════════════════════════════════════════════════════════════════ */
 
-.xwave-panel {
-  background: var(--xw-panel) !important;
-  border: 1px solid var(--xw-border-soft) !important;
-  border-radius: var(--xw-radius) !important;
-  padding: 6px 8px 8px !important;
-  gap: 4px !important;
-}
-
-.xwave-panel > .form,
-.xwave-panel > .block {
-  margin-top: 0 !important;
-  margin-bottom: 0 !important;
-}
-
-.xwave-seed input {
-  font-family: var(--xw-mono) !important;
-  font-size: 0.74rem !important;
-  text-align: center;
-}
-
-.xwave-raw-view {
-  border: 1px dashed var(--xw-border) !important;
-  border-radius: var(--xw-radius-sm) !important;
-}
-
-.xwave-raw-view img {
-  cursor: crosshair !important;
-}
-
-/* accordion */
-.xwave-app .accordion,
-.xwave-app .label-wrap {
-  background: transparent !important;
-}
-
-/* sliders */
-.xwave-app input[type="range"] {
-  accent-color: var(--xw-accent) !important;
-  margin: 0 !important;
-}
-
-/* scrollbars */
-.xwave-app ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.xwave-app ::-webkit-scrollbar-thumb {
-  background: var(--xw-border);
-  border-radius: 4px;
-}
-
-.xwave-app ::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-/* dropdown menus */
-.xwave-app ul.options {
-  background: var(--xw-panel-2) !important;
-  border: 1px solid var(--xw-border) !important;
-}
-
-.xwave-app ul.options li:hover,
-.xwave-app ul.options li.selected {
-  background: var(--xw-accent-dim) !important;
-}
-
-/* progress + toasts stay subtle */
-.xwave-app .progress-text,
-.xwave-app .eta-bar {
-  color: var(--xw-text-dim) !important;
-}
-
-/* ── main tabs (Compose | Infinite Canvas | Edit | Library) ── */
-.xwave-main-tabs {
-  margin-top: 4px !important;
-}
-
-.xwave-main-tabs > .tab-nav,
-.xwave-main-tabs .tab-container[role="tablist"] {
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  justify-content: flex-start !important;
-  align-items: stretch !important;
-  max-width: 1680px !important;
-  width: 100% !important;
-  margin-left: auto !important;
-  margin-right: auto !important;
-  min-height: 38px !important;
-  box-sizing: border-box !important;
-  border-bottom: 1px solid var(--xw-border) !important;
-  margin-bottom: 10px !important;
-  gap: 4px !important;
-}
-
-.xwave-main-tabs > .tab-nav button,
-.xwave-main-tabs .tab-container[role="tablist"] button {
-  flex: 0 0 auto !important;
-  min-width: 148px !important;
-  box-sizing: border-box !important;
-  font-size: 0.8rem !important;
-  font-weight: 600 !important;
-  color: var(--xw-text-dim) !important;
-  background: transparent !important;
-  border: none !important;
-  border-bottom: 2px solid transparent !important;
-  border-radius: 0 !important;
-  padding: 6px 12px !important;
-}
-
-.xwave-main-tabs > .tab-nav button.selected,
-.xwave-main-tabs .tab-container[role="tablist"] button.selected,
-.xwave-main-tabs .tab-container[role="tablist"] button[aria-selected="true"] {
-  color: var(--xw-accent) !important;
-  border-bottom-color: var(--xw-accent) !important;
-}
-
-/* Keep the four main panels exclusive. Gradio 6 toggles inline display, but
-   IC layout CSS used display:flex !important and leaked into other tabs. */
-.xwave-main-tabs:has(#xwave-compose-tab-button[aria-selected="true"]) #xwave-infinite-canvas-tab,
-.xwave-main-tabs:has(#xwave-compose-tab-button[aria-selected="true"]) #xwave-library-tab,
-.xwave-main-tabs:has(#xwave-compose-tab-button[aria-selected="true"]) #xwave-edit-tab,
-.xwave-main-tabs:has(#xwave-library-tab-button[aria-selected="true"]) #xwave-infinite-canvas-tab,
-.xwave-main-tabs:has(#xwave-library-tab-button[aria-selected="true"]) #xwave-compose-tab,
-.xwave-main-tabs:has(#xwave-library-tab-button[aria-selected="true"]) #xwave-edit-tab,
-.xwave-main-tabs:has(#xwave-infinite-canvas-tab-button[aria-selected="true"]) #xwave-compose-tab,
-.xwave-main-tabs:has(#xwave-infinite-canvas-tab-button[aria-selected="true"]) #xwave-library-tab,
-.xwave-main-tabs:has(#xwave-infinite-canvas-tab-button[aria-selected="true"]) #xwave-edit-tab,
-.xwave-main-tabs:has(#xwave-edit-tab-button[aria-selected="true"]) #xwave-compose-tab,
-.xwave-main-tabs:has(#xwave-edit-tab-button[aria-selected="true"]) #xwave-infinite-canvas-tab,
-.xwave-main-tabs:has(#xwave-edit-tab-button[aria-selected="true"]) #xwave-library-tab {
-  display: none !important;
-  height: auto !important;
-  max-height: none !important;
-  overflow: visible !important;
-}
-
-/* ── Infinite Canvas tab ── */
 .xwave-lc-viewport {
   height: 100% !important;
   min-height: 0 !important;
@@ -1298,9 +1634,9 @@ footer {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--xw-panel);
+  background: var(--xw-canvas-bg);
   border: 1px solid var(--xw-border);
-  border-radius: var(--xw-radius);
+  border-radius: var(--xw-radius-lg);
   overflow: hidden;
 }
 
@@ -1320,9 +1656,9 @@ footer {
 }
 
 .xwave-main-tabs:has(#xwave-infinite-canvas-tab-button[aria-selected="true"]) #xwave-infinite-canvas-tab {
-  /* 130px ≈ brand row + tab nav; keep Generate bar above the fold. */
-  height: calc(100dvh - 140px) !important;
-  max-height: calc(100dvh - 140px) !important;
+  /* 120px ≈ brand row + tab nav; keep Generate bar above the fold. */
+  height: calc(100dvh - 120px) !important;
+  max-height: calc(100dvh - 120px) !important;
   min-height: 0 !important;
   overflow: hidden !important;
   display: flex !important;
@@ -1356,8 +1692,8 @@ footer {
   display: flex !important;
   flex-direction: column !important;
   flex-wrap: nowrap !important;
-  gap: 6px !important;
-  padding-right: 2px !important;
+  gap: var(--xw-sp-3) !important;
+  padding-right: var(--xw-sp-1) !important;
 }
 
 .xwave-lc-side-scroll {
@@ -1367,8 +1703,8 @@ footer {
   overflow-x: hidden !important;
   overflow-y: scroll !important;
   overscroll-behavior: contain;
-  padding-right: 6px !important;
-  gap: 6px !important;
+  padding-right: var(--xw-sp-3) !important;
+  gap: var(--xw-sp-3) !important;
   align-content: flex-start !important;
 }
 
@@ -1390,32 +1726,34 @@ footer {
 /* Denser LC accordions / controls */
 .xwave-lc-side .gr-accordion,
 .xwave-lc-side .block.gr-accordion {
-  margin: 0 0 4px !important;
+  margin: 0 0 var(--xw-sp-2) !important;
   padding: 0 !important;
   border: 1px solid var(--xw-border-soft) !important;
-  border-radius: var(--xw-radius-sm) !important;
+  border-radius: var(--xw-radius) !important;
   background: var(--xw-panel) !important;
 }
 
 .xwave-lc-side .gr-accordion > .label-wrap,
 .xwave-lc-side .block.gr-accordion > .label-wrap {
-  padding: 6px 8px !important;
+  padding: var(--xw-sp-3) var(--xw-sp-4) !important;
   margin: 0 !important;
 }
 
 .xwave-lc-side .gr-accordion > .label-wrap span,
 .xwave-lc-side .block.gr-accordion > .label-wrap span {
-  font-size: 0.72rem !important;
-  font-weight: 650 !important;
+  font-size: var(--xw-text-sm) !important;
+  font-weight: 600 !important;
+  font-family: var(--xw-display) !important;
+  letter-spacing: 0.04em !important;
 }
 
 .xwave-lc-side .gr-accordion .wrap,
 .xwave-lc-side .block.gr-accordion .wrap {
-  padding: 4px 8px 8px !important;
+  padding: var(--xw-sp-2) var(--xw-sp-4) var(--xw-sp-4) !important;
 }
 
 .xwave-lc-side .form {
-  gap: 4px !important;
+  gap: var(--xw-sp-2) !important;
   margin: 0 !important;
 }
 
@@ -1426,8 +1764,8 @@ footer {
   flex-direction: row !important;
   flex-wrap: nowrap !important;
   align-items: flex-end !important;
-  gap: 4px !important;
-  margin: 0 0 4px !important;
+  gap: var(--xw-sp-2) !important;
+  margin: 0 0 var(--xw-sp-2) !important;
   width: 100% !important;
   min-width: 0 !important;
 }
@@ -1454,9 +1792,9 @@ footer {
 .xwave-lc-side .xwave-lc-compact-row button {
   flex: 0 0 auto !important;
   min-width: 0 !important;
-  height: 28px !important;
-  padding: 0 8px !important;
-  font-size: 0.7rem !important;
+  height: var(--xw-ctl-h) !important;
+  padding: 0 var(--xw-sp-4) !important;
+  font-size: var(--xw-text-sm) !important;
 }
 
 .xwave-lc-side .xwave-lc-mini .label-wrap,
@@ -1465,7 +1803,7 @@ footer {
 .xwave-lc-side .xwave-lc-mini-dd span[data-testid="block-info"],
 .xwave-lc-side .xwave-lc-mini-slider .label-wrap,
 .xwave-lc-side .xwave-lc-mini-slider span[data-testid="block-info"] {
-  font-size: 0.62rem !important;
+  font-size: var(--xw-text-xs) !important;
   line-height: 1.1 !important;
   margin: 0 0 1px !important;
   padding: 0 !important;
@@ -1480,14 +1818,14 @@ footer {
 }
 
 .xwave-lc-side .xwave-lc-mini input[type="number"] {
-  padding: 2px 4px !important;
-  font-size: 0.7rem !important;
+  padding: var(--xw-sp-1) var(--xw-sp-2) !important;
+  font-size: var(--xw-text-sm) !important;
   font-family: var(--xw-mono) !important;
   min-width: 0 !important;
   width: 100% !important;
   max-width: none !important;
-  height: 28px !important;
-  min-height: 28px !important;
+  height: var(--xw-ctl-h) !important;
+  min-height: var(--xw-ctl-h) !important;
   box-sizing: border-box !important;
 }
 
@@ -1514,8 +1852,8 @@ footer {
 .xwave-lc-side .xwave-lc-mini-dd .wrap-inner,
 .xwave-lc-side .xwave-lc-mini-dd input,
 .xwave-lc-side .xwave-lc-mini-dd .secondary-wrap {
-  min-height: 28px !important;
-  font-size: 0.7rem !important;
+  min-height: var(--xw-ctl-h) !important;
+  font-size: var(--xw-text-sm) !important;
 }
 
 .xwave-lc-side .xwave-lc-mini-slider .slider_input_container span,
@@ -1532,25 +1870,25 @@ footer {
 .xwave-lc-side .xwave-lc-mini-slider input[type="number"] {
   max-width: 40px !important;
   min-width: 36px !important;
-  height: 26px !important;
-  font-size: 0.68rem !important;
-  padding: 2px 3px !important;
+  height: var(--xw-ctl-h) !important;
+  font-size: var(--xw-text-xs) !important;
+  padding: var(--xw-sp-1) 3px !important;
 }
 
 /* General denser LC form chrome */
 .xwave-lc-side .block {
-  margin-bottom: 4px !important;
+  margin-bottom: var(--xw-sp-2) !important;
 }
 
 .xwave-lc-side label span,
 .xwave-lc-side .label-wrap span {
-  font-size: 0.68rem !important;
+  font-size: var(--xw-text-sm) !important;
 }
 
 .xwave-lc-side input[type="number"],
 .xwave-lc-side input[type="text"],
 .xwave-lc-side .wrap-inner {
-  min-height: 30px !important;
+  min-height: var(--xw-ctl-h) !important;
 }
 
 .xwave-lc-side textarea {
@@ -1566,9 +1904,9 @@ footer {
   flex: 0 0 auto !important;
   display: flex !important;
   flex-direction: column !important;
-  gap: 6px !important;
+  gap: var(--xw-sp-3) !important;
   margin: 0 !important;
-  padding: 8px 4px 2px !important;
+  padding: var(--xw-sp-4) var(--xw-sp-2) var(--xw-sp-1) !important;
   background: var(--xw-bg) !important;
   border-top: 1px solid var(--xw-border) !important;
   z-index: 6 !important;
@@ -1576,98 +1914,28 @@ footer {
 
 .xwave-lc-actions .row {
   margin: 0 !important;
-  gap: 6px !important;
+  gap: var(--xw-sp-3) !important;
 }
 
-.xwave-text-dim {
-  color: var(--xw-text-dim) !important;
-  font-size: 0.72rem !important;
-  margin: 0 0 4px !important;
-  line-height: 1.3 !important;
-}
-
-/* ── image library ── */
-.xwave-lib-grid {
-  display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-  gap: 10px;
-  min-height: 120px;
-  padding: 4px 2px 8px;
-}
-
-.xwave-lib-grid-compact {
-  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
-  gap: 6px;
-  min-height: 72px;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.xwave-lib-empty {
-  grid-column: 1 / -1;
-  color: var(--xw-text-dim);
-  font-size: 0.78rem;
-  margin: 8px 4px;
-}
-
-.xwave-lib-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 0;
-  border: 1px solid var(--xw-border);
-  border-radius: 6px;
-  background: var(--xw-panel, transparent);
-  color: var(--xw-text);
-  cursor: pointer;
-  overflow: hidden;
-  text-align: left;
-}
-
-.xwave-lib-item.is-selected {
-  border-color: var(--xw-accent) !important;
-  box-shadow: 0 0 0 1px var(--xw-accent);
-}
-
-.xwave-lib-thumb {
-  display: block;
-  width: 100%;
-  aspect-ratio: 1;
-  background: #111 center / cover no-repeat;
-}
-
-.xwave-lib-caption {
-  display: block;
-  font-size: 0.68rem;
-  line-height: 1.25;
-  padding: 0 6px 6px;
-  color: var(--xw-text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.xwave-lib-pager {
-  align-items: center !important;
-}
-
-.xwave-lib-browse {
-  min-height: 280px;
-}
+/* ════════════════════════════════════════════════════════════════════
+   11. EDIT TAB + XLITCH FX BAR
+   ════════════════════════════════════════════════════════════════════ */
 
 .xwave-edit-html {
-  min-height: 380px !important;
-  height: 48vh !important;
+  min-height: 300px !important;
+  height: 42vh !important;
+  flex: 0 0 auto !important;
+  margin-bottom: 0 !important;
 }
 
 .xwave-edit-viewport {
-  gap: 4px !important;
+  gap: var(--xw-sp-5) !important;
 }
 
 .xwave-edit-html > .html-container,
 .xwave-edit-html > div {
   height: 100% !important;
-  min-height: 360px !important;
+  min-height: 280px !important;
 }
 
 .xwave-edit-root,
@@ -1675,11 +1943,12 @@ footer {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 360px;
-  background: var(--xw-panel);
+  min-height: 280px;
+  background: var(--xw-canvas-bg);
   border: 1px solid var(--xw-border);
-  border-radius: var(--xw-radius);
+  border-radius: var(--xw-radius-lg);
   overflow: hidden;
+  isolation: isolate;
 }
 
 .xwave-edit-canvas {
@@ -1694,12 +1963,12 @@ footer {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 6px;
+  bottom: var(--xw-sp-3);
   margin: 0;
   text-align: center;
   pointer-events: none;
   color: var(--xw-text-dim);
-  font-size: 0.68rem;
+  font-size: var(--xw-text-sm);
 }
 
 .xwave-fx-html,
@@ -1714,47 +1983,61 @@ footer {
 .xwave-fx-root {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 0.72rem;
+  gap: var(--xw-sp-4);
+  margin-top: var(--xw-sp-2);
+  padding: var(--xw-sp-4) var(--xw-sp-5);
+  font-size: var(--xw-text-sm);
+  background: var(--xw-panel);
+  border: 1px solid var(--xw-border-soft);
+  border-radius: var(--xw-radius-lg);
+  box-shadow: var(--xw-shadow);
 }
 
 .xwave-fx-bar {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: var(--xw-sp-4);
 }
 
-.xwave-fx-bar select {
-  min-width: 0;
-  max-width: 220px;
-  flex: 1 1 140px;
+.xwave-fx-bar .xwave-fx-field {
+  flex: 1 1 148px;
+  max-width: 240px;
+}
+
+.xwave-fx-bar .xwave-fx-field select {
+  width: 100%;
+  max-width: none;
 }
 
 .xwave-fx-bar #xwave-fx-apply {
   flex: 0 0 auto;
-  background: var(--xw-accent, #5eead4) !important;
-  color: #042f2e !important;
+  background: var(--xw-accent) !important;
+  color: var(--xw-accent-contrast) !important;
   border: 0 !important;
-  border-radius: 5px;
-  padding: 4px 12px;
-  font-size: 0.75rem;
-  font-weight: 650;
+  border-radius: var(--xw-radius-sm);
+  padding: var(--xw-sp-2) var(--xw-sp-5);
+  font-size: var(--xw-text-md);
+  font-weight: 600;
   cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.xwave-fx-bar #xwave-fx-apply:hover {
+  background: var(--xw-accent-hover) !important;
 }
 
 .xwave-fx-root select,
 .xwave-fx-root input[type="number"],
 .xwave-fx-root input[type="color"] {
-  background: var(--xw-panel);
+  background: var(--xw-inset);
   color: inherit;
   border: 1px solid var(--xw-border);
-  border-radius: 5px;
+  border-radius: var(--xw-radius-sm);
   padding: 3px 5px;
-  font-size: 0.72rem;
-  height: 26px;
+  font-size: var(--xw-text-sm);
+  height: var(--xw-ctl-h);
 }
 
 .xwave-fx-root input[type="color"] {
@@ -1764,11 +2047,12 @@ footer {
 
 .xwave-fx-params {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
-  gap: 4px 8px;
-  max-height: 132px;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: var(--xw-sp-3) var(--xw-sp-4);
+  max-height: 28vh;
   overflow: auto;
-  padding: 2px 0;
+  padding: var(--xw-sp-2) 0 0;
+  border-top: 1px solid var(--xw-border-soft);
 }
 
 .xwave-fx-field {
@@ -1780,7 +2064,7 @@ footer {
 }
 
 .xwave-fx-field span {
-  font-size: 0.62rem;
+  font-size: var(--xw-text-xs);
   line-height: 1.15;
   white-space: nowrap;
   overflow: hidden;
@@ -1790,8 +2074,8 @@ footer {
 .xwave-fx-field.is-bool {
   flex-direction: row;
   align-items: center;
-  gap: 6px;
-  min-height: 26px;
+  gap: var(--xw-sp-3);
+  min-height: var(--xw-ctl-h);
 }
 
 .xwave-fx-root .is-hidden {
@@ -1805,6 +2089,283 @@ footer {
   gap: 5px;
   color: var(--xw-text-dim);
   white-space: nowrap;
-  font-size: 0.72rem;
+  font-size: var(--xw-text-sm);
+  min-height: var(--xw-ctl-h);
+  margin-bottom: 1px;
 }
 
+/* ════════════════════════════════════════════════════════════════════
+   12. LIBRARY
+   ════════════════════════════════════════════════════════════════════ */
+
+.xwave-lib-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+  min-height: 120px;
+  padding: var(--xw-sp-2) var(--xw-sp-1) var(--xw-sp-4);
+}
+
+.xwave-lib-grid-compact {
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: var(--xw-sp-3);
+  min-height: 72px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.xwave-lib-empty {
+  grid-column: 1 / -1;
+  color: var(--xw-text-dim);
+  font-size: var(--xw-text-lg);
+  margin: var(--xw-sp-4) var(--xw-sp-2);
+}
+
+.xwave-lib-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--xw-sp-2);
+  padding: 0;
+  border: 1px solid var(--xw-border);
+  border-radius: var(--xw-radius);
+  background: var(--xw-panel);
+  color: var(--xw-text);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.xwave-lib-item:hover {
+  border-color: var(--xw-faint);
+}
+
+.xwave-lib-item.is-selected {
+  border-color: var(--xw-accent) !important;
+  box-shadow: 0 0 0 1px var(--xw-accent);
+}
+
+.xwave-lib-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  background: var(--xw-thumb-bg) center / cover no-repeat;
+}
+
+.xwave-lib-caption {
+  display: block;
+  font-size: var(--xw-text-sm);
+  line-height: 1.25;
+  padding: 0 var(--xw-sp-3) var(--xw-sp-3);
+  color: var(--xw-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xwave-lib-pager {
+  align-items: center !important;
+}
+
+.xwave-lib-browse {
+  min-height: 280px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   13. SETTINGS TAB
+   ════════════════════════════════════════════════════════════════════ */
+
+.xwave-set-wrap {
+  max-width: 860px;
+  margin: var(--xw-sp-5) auto 0;
+  padding: 0 var(--xw-sp-4) var(--xw-sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--xw-sp-5);
+}
+
+.xwave-set-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--xw-sp-1);
+}
+
+.xwave-set-title {
+  margin: 0;
+  font-family: var(--xw-display);
+  font-size: var(--xw-text-2xl);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--xw-text);
+}
+
+.xwave-set-sub {
+  margin: 0;
+  font-size: var(--xw-text-lg);
+  color: var(--xw-text-dim);
+  line-height: 1.4;
+}
+
+.xwave-set-section {
+  background: var(--xw-panel);
+  border: 1px solid var(--xw-border-soft);
+  border-radius: var(--xw-radius-lg);
+  box-shadow: var(--xw-shadow);
+  padding: var(--xw-sp-5) var(--xw-sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--xw-sp-4);
+}
+
+.xwave-set-section-title {
+  margin: 0;
+  font-family: var(--xw-display);
+  font-size: var(--xw-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--xw-faint);
+}
+
+.xwave-set-label {
+  font-size: var(--xw-text-sm);
+  font-weight: 500;
+  color: var(--xw-text-dim);
+  margin: 0;
+}
+
+/* segmented toggle (mode / density / motion) */
+.xwave-set-seg {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--xw-border);
+  border-radius: var(--xw-radius);
+  overflow: hidden;
+  width: fit-content;
+}
+
+.xwave-set-seg button {
+  appearance: none;
+  border: none;
+  border-left: 1px solid var(--xw-border);
+  background: var(--xw-panel-2);
+  color: var(--xw-text-dim);
+  font-family: var(--xw-font);
+  font-size: var(--xw-text-md);
+  font-weight: 500;
+  padding: var(--xw-sp-3) var(--xw-sp-6);
+  min-height: 30px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.xwave-set-seg button:first-child {
+  border-left: none;
+}
+
+.xwave-set-seg button:hover {
+  color: var(--xw-text);
+}
+
+.xwave-set-seg button.is-selected {
+  background: var(--xw-accent);
+  color: var(--xw-accent-contrast);
+  font-weight: 600;
+}
+
+/* accent swatch grid */
+.xwave-set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: var(--xw-sp-4);
+}
+
+.xwave-set-swatch {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--xw-sp-4);
+  padding: var(--xw-sp-4) var(--xw-sp-5);
+  background: var(--xw-panel-2);
+  border: 1px solid var(--xw-border);
+  border-radius: var(--xw-radius);
+  color: var(--xw-text);
+  font-family: var(--xw-font);
+  font-size: var(--xw-text-md);
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.xwave-set-swatch:hover {
+  border-color: var(--xw-faint);
+}
+
+.xwave-set-swatch.is-selected {
+  border-color: var(--xw-accent);
+  box-shadow: 0 0 0 1px var(--xw-accent);
+}
+
+.xwave-set-chip {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  background: var(--chip, var(--xw-accent));
+  border: 1px solid var(--xw-overlay);
+}
+
+.xwave-set-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xw-sp-4);
+}
+
+.xwave-set-note {
+  margin: 0;
+  font-size: var(--xw-text-sm);
+  color: var(--xw-faint);
+  line-height: 1.4;
+}
+
+.xwave-set-reset {
+  appearance: none;
+  border: 1px solid var(--xw-border);
+  border-radius: var(--xw-radius-sm);
+  background: var(--xw-panel-2);
+  color: var(--xw-text);
+  font-family: var(--xw-font);
+  font-size: var(--xw-text-md);
+  font-weight: 500;
+  padding: var(--xw-sp-3) var(--xw-sp-5);
+  min-height: 30px;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.xwave-set-reset:hover {
+  border-color: var(--xw-danger);
+  color: var(--xw-danger);
+}
+
+.xwave-set-wrap :is(button):focus-visible {
+  outline: 2px solid var(--xw-focus);
+  outline-offset: 1px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   14. MOTION PREFERENCE
+   ════════════════════════════════════════════════════════════════════ */
+
+html[data-motion="reduced"] .gradio-container *,
+html[data-motion="reduced"] .gradio-container *::before,
+html[data-motion="reduced"] .gradio-container *::after,
+html[data-motion="reduced"] .xwave-set-wrap *,
+html[data-motion="reduced"] .xwave-set-wrap *::before,
+html[data-motion="reduced"] .xwave-set-wrap *::after {
+  transition: none !important;
+  animation: none !important;
+}

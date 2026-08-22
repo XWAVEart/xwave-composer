@@ -13,7 +13,7 @@ Developed and tuned for an **RTX 5090** (~32 GB VRAM).
 
 Hybrid design: compose freely on the WORK canvas, refine with a fast SDXL Hyper pass that uses the WORK image as init.
 
-The UI has four tabs. **Compose**, **Infinite Canvas**, and **Edit** are GPU-exclusive (only one owns the heavy model stack). **Library** is GPU-neutral and keeps saved stills on disk between sessions.
+The UI has five tabs. **Compose**, **Infinite Canvas**, and **Edit** are GPU-exclusive (only one owns the heavy model stack). **Library** is GPU-neutral and keeps saved stills on disk between sessions. **Settings** holds interface preferences.
 
 | Tab | Stack | Use case |
 |-----|--------|----------|
@@ -21,8 +21,9 @@ The UI has four tabs. **Compose**, **Infinite Canvas**, and **Edit** are GPU-exc
 | **Infinite Canvas** | SDXL Hyper only | Large flat canvases built from overlapping region stamps |
 | **Edit** | SAM2 isolator | Load a still, hover-segment layers, apply Xlitch effects, save / export / upscale |
 | **Library** | none | Browse, name, download, delete, and send saved stills into Compose, Infinite Canvas, or Edit |
+| **Settings** | none | Color scheme, density, and motion preferences (stored in the browser) |
 
-Switching between **Compose**, **Infinite Canvas**, and **Edit** unloads the other mode’s models to free VRAM. Opening **Library** does not change the GPU stack.
+Switching between **Compose**, **Infinite Canvas**, and **Edit** unloads the other mode’s models to free VRAM. Opening **Library** or **Settings** does not change the GPU stack.
 
 ## Requirements
 
@@ -107,6 +108,8 @@ Open on the LAN: `http://<host-ip>:7860`
 ## User guide
 
 UI labels match the controls in the app. Put the pointer on a control to see a short tooltip.
+
+The chrome is a token-driven studio theme (**IBM Plex Sans** / **Space Grotesk**). The top tab bar stays the same width on every page (Compose, Infinite Canvas, Edit, Library, Settings). Property groups sit in soft panel cards. Canvas viewports stay dark even in Light mode so you can judge pixels. Change appearance, density, and motion in **Settings** — see [21. Settings](#21-settings).
 
 ### 1. Start the application
 
@@ -371,7 +374,7 @@ Typical uses: outpainting beyond a fixed frame, tiled murals, panoramic scenes, 
 4. Switching back to **Compose** re-enables the Compose stack. Press **Load models** if Flux was unloaded.
 5. Compose live OUTPUT and Infinite Canvas generation share one SDXL mutex — only one can run inference at a time.
 6. Pending Compose OUTPUT refreshes are deferred while you stay on Infinite Canvas or Edit; they resume when you return to Compose.
-7. The **Library** tab does not load or unload models. Use **Save to library** on Compose, Infinite Canvas, or Edit to keep the current result (no upscale). Import a library still onto a Compose layer, onto Infinite Canvas with **Fit canvas** / **Paste centered** / **Paste in stamp**, or into **Edit**. Details: [20. Library](#20-library).
+7. The **Library** and **Settings** tabs do not load or unload models. Use **Save to library** on Compose, Infinite Canvas, or Edit to keep the current result (no upscale). Import a library still onto a Compose layer, onto Infinite Canvas with **Fit canvas** / **Paste centered** / **Paste in stamp**, or into **Edit**. Details: [20. Library](#20-library).
 
 #### Load SDXL
 
@@ -395,7 +398,7 @@ Canvas presets and region sizes always stay on the 64 px grid.
 #### Import an image onto the canvas
 
 1. Open **Import**.
-2. Choose placement: **Fit canvas** (resize the document around the image, pad unoccupied), **Paste centered** (keep canvas size; scale down if needed), or **Paste in stamp** (contain-fit in the teal region).
+2. Choose placement: **Fit canvas** (resize the document around the image, pad unoccupied), **Paste centered** (keep canvas size; scale down if needed), or **Paste in stamp** (contain-fit in the region stamp).
 3. Drop a file and press **Import file**, or click a library thumbnail.
 4. Generate regions around or over the imported paint. **Undo** reverses the import.
 5. **Save to library** stores the current canvas pixels (no upscale).
@@ -412,9 +415,9 @@ The main view is an interactive canvas (not a static image).
 
 #### Place and size the generation region
 
-The teal box is the **region stamp** — the area that will be written on the next **Generate region** pass. It may extend **outside** the canvas edge for outpainting; at least one 64 px cell always stays recoverable on-canvas.
+The accent-colored box is the **region stamp** — the area that will be written on the next **Generate region** pass. It may extend **outside** the canvas edge for outpainting; at least one 64 px cell always stays recoverable on-canvas.
 
-1. **Drag** the teal box to move it. On release it snaps smoothly to the 64 px grid.
+1. **Drag** the stamp to move it. On release it snaps smoothly to the 64 px grid.
 2. Open **Region numbers** for exact **X**, **Y**, **W**, **H**, or press **Apply** after editing.
 3. Set **Aspect** (`1:1`, `4:3`, `3:2`, `16:9`, `9:16`, `3:4`, `2:3`) to resize the stamp while keeping proportions.
 4. Press **Size +** / **Size −** to grow or shrink by 64 px on the short side.
@@ -487,7 +490,7 @@ Preview JPEGs for the live viewport are cached under `workspace/large_canvas_cac
 
 1. Open **Infinite Canvas** and **Load SDXL** with your preferred base and performance profile.
 2. **Create** a canvas (or **Expand** an existing one).
-3. Drag the teal region to the area you want, set aspect/size, and write a prompt (+ optional style).
+3. Drag the region stamp to the area you want, set aspect/size, and write a prompt (+ optional style).
 4. Press **Generate region**; repeat for adjacent areas, outpainting past edges as needed.
 5. Tune **Blending** if seams show; use **Undo** to step back one write.
 6. **Run fused refine** for a final global polish.
@@ -514,7 +517,7 @@ Edit is a separate tab for **segmenting a still into registered layers**, then *
 #### Segment with SAM2
 
 1. Set **Mode** to **Include (+)** (default), **Exclude (−)**, or **Off**.
-2. **Hover** an object until it glows teal, then **click** to lift that region onto its own layer. Base is punched so the cut is not duplicated.
+2. **Hover** an object until it glows, then **click** to lift that region onto its own layer. Base is punched so the cut is not duplicated.
 3. **Exclude (−)** trims the selected cut layer (hover the part to remove, then click). Cut an object first.
 4. **Off** ignores canvas clicks.
 5. SAM2 keeps the connected blob under the cursor and drops distant specks. Tiny islands far from the pointer are discarded; a small object you are actually pointing at still selects.
@@ -530,10 +533,12 @@ The first hover on a new image can stall while SAM2 loads. Wait for the glow bef
 
 #### Xlitch effects
 
-Effects are CPU-only and apply to the **selected layer**. The compact bar sits **under the center image**.
+Effects are CPU-only and apply to the **selected layer**. The **Effects** card sits **below** the center image (not on top of it). Group, effect, and parameters use the same labeled fields as the rest of the studio chrome.
+
+The catalog matches the Xlitch Flask forms (30 effects). **Color Shift Expansion** also exposes **Color mode** (`xtreme` / `subtle` / `mono`).
 
 1. Choose a **group**, then an **effect**. Groups: Color and tone, Pixel sorting, Pixelation and stylization, Distortion, Slice and block, Glitch, Blend.
-2. Tune the visible parameters (only the fields for that effect).
+2. Tune the visible parameters (only the fields for that effect). Extra fields appear when a choice needs them (for example gradient colors, warp extras, mask type).
 3. Two-image effects (**Double Expose**, **Masked Merge**) show a **secondary** source: **Rest of composite** (default) or another layer.
 4. Some warp/distort effects show **Warp alpha** — the transparency channel is warped with the RGB.
 5. Press **Apply**. RGB is processed; alpha is kept unless Warp alpha is on. Undo snapshots the layer first.
@@ -583,6 +588,31 @@ Use **Save to library** on:
 
 Optional name is stored with the still (max 80 characters).
 
+### 21. Settings
+
+Settings is a GPU-neutral tab for interface preferences. Choices apply instantly and are stored in the browser (`localStorage`), so they survive restarts on the same machine and browser.
+
+1. Open the **Settings** tab.
+2. **Appearance** — pick **Dark** or **Light** mode, then an accent: **Teal** (default), **Sky**, **Amber**, **Lime**, **Rose**, or **Graphite**. Canvas areas stay dark in Light mode so image judging stays consistent.
+3. **Density** — **Compact** (default) or **Comfortable** (taller controls, looser spacing).
+4. **Motion** — **Full** or **Reduced** (turns off interface transitions).
+5. Press **Reset to defaults** to restore Dark / Teal / Compact / Full.
+
+The accent also recolors the WORK selection box and the Infinite Canvas region stamp.
+
+### 22. Look and layout
+
+What changed in the studio chrome:
+
+- **Five tabs** — Compose, Infinite Canvas, Edit, Library, Settings. The tab row does not resize or jump when you switch pages. Compose / Edit / Library / Settings stay at studio width; Infinite Canvas can use the full row under that same tab bar.
+- **Theme tokens** — color, spacing, type, and control height come from CSS variables. **Settings** writes `data-mode`, `data-accent`, `data-density`, and `data-motion` on the page. Defaults: Dark, Teal, Compact, Full motion.
+- **Light mode** — panels and type go light; WORK, Infinite Canvas, and Edit viewports stay dark so judging does not flip.
+- **Density** — Compact keeps the dense control height. Comfortable raises spacing and control size.
+- **Motion** — Reduced turns off chrome transitions. Canvas drawing is unchanged.
+- **Modular panels** — Compose property columns, Settings sections, and the Edit **Effects** card share one panel recipe (soft fill, thin border, small caps title, labeled fields).
+- **Edit effects** — the effect menus sit in that card under the image, with labeled Group / Effect / Secondary fields and a scrolling parameter grid. They no longer overlap the loaded still.
+- **Accent on canvas** — WORK selection handles and the Infinite Canvas stamp read `--xw-accent` so they follow Settings.
+
 ## Project layout
 
 ```
@@ -605,11 +635,12 @@ xwave-composer/
     pipeline/infinite_canvas/ # strength / priming / fuse / photometric
     library/               # stills catalog (store + HTML views)
     style/                 # CSV preset loader + prompt build
-    ui/gradio_app.py       # Gradio UI (Compose + Infinite Canvas + Edit + Library)
+    ui/gradio_app.py       # Gradio UI (Compose + Infinite Canvas + Edit + Library + Settings)
     ui/large_canvas_tab.py # Infinite Canvas tab builder
     ui/edit_tab.py         # Edit tab builder
     ui/library_tab.py      # Library tab builder
-    ui/assets/             # app.css, work_canvas.js, large_canvas.js, library.js, edit.js, tooltips.js
+    ui/settings_tab.py     # Settings tab (appearance / density / motion)
+    ui/assets/             # app.css, settings.js, work_canvas.js, large_canvas.js, library.js, edit.js, tooltips.js
   workspace/               # runtime layer images
   library/                 # saved stills (full + thumbs; gitignored)
   exports/                 # 2× exports

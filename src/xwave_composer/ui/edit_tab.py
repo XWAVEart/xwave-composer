@@ -122,11 +122,16 @@ def render_effects_html() -> str:
     b64 = base64.b64encode(json.dumps(schema, separators=(",", ":")).encode()).decode()
     return (
         f'<div id="xwave-fx-root" class="xwave-fx-root" data-schema="{b64}">'
+        f'<p class="xwave-set-section-title">Effects</p>'
         f'<div class="xwave-fx-bar">'
-        f'<select id="xwave-fx-group" title="Group" aria-label="Effect group"></select>'
-        f'<select id="xwave-fx-effect" title="Effect" aria-label="Effect"></select>'
-        f'<select id="xwave-fx-secondary" class="is-hidden" title="Secondary source" '
-        f'aria-label="Secondary source"></select>'
+        f'<label class="xwave-fx-field"><span>Group</span>'
+        f'<select id="xwave-fx-group" title="Group" aria-label="Effect group"></select></label>'
+        f'<label class="xwave-fx-field"><span>Effect</span>'
+        f'<select id="xwave-fx-effect" title="Effect" aria-label="Effect"></select></label>'
+        f'<label id="xwave-fx-secondary-wrap" class="xwave-fx-field is-hidden">'
+        f"<span>Secondary</span>"
+        f'<select id="xwave-fx-secondary" title="Secondary source" '
+        f'aria-label="Secondary source"></select></label>'
         f'<label id="xwave-fx-warp-wrap" class="xwave-fx-warp is-hidden">'
         f'<input type="checkbox" id="xwave-fx-warp"> Warp alpha</label>'
         f'<button type="button" id="xwave-fx-apply">Apply</button>'

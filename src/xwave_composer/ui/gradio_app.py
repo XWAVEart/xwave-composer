@@ -37,6 +37,7 @@ from xwave_composer.pipeline.edit import EditSession
 from xwave_composer.style.style_manager import CONCAT_ORDERS, STYLE_FAMILIES
 from xwave_composer.ui.large_canvas_tab import _scene_html, build_large_canvas_tab
 from xwave_composer.ui.edit_tab import build_edit_tab
+from xwave_composer.ui.settings_tab import build_settings_tab
 from xwave_composer.ui.library_tab import (
     build_library_tab,
     placement_key,
@@ -460,7 +461,10 @@ def _build_theme() -> gr.themes.Base:
             radius_size=gr.themes.sizes.radius_sm,
             spacing_size=gr.themes.sizes.spacing_sm,
             text_size=gr.themes.sizes.text_sm,
-            font=gr.themes.GoogleFont("Inter"),
+            font=[
+                gr.themes.GoogleFont("IBM Plex Sans"),
+                gr.themes.GoogleFont("Space Grotesk"),
+            ],
             font_mono=gr.themes.GoogleFont("JetBrains Mono"),
         )
     except Exception:  # noqa: BLE001
@@ -481,7 +485,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
     css = (ASSETS / "app.css").read_text(encoding="utf-8") if (ASSETS / "app.css").exists() else ""
     js_parts: list[str] = []
-    for name in ("work_canvas.js", "tooltips.js", "large_canvas.js", "library.js", "edit.js"):
+    for name in ("settings.js", "work_canvas.js", "tooltips.js", "large_canvas.js", "library.js", "edit.js"):
         path = ASSETS / name
         if path.exists():
             js_parts.append(path.read_text(encoding="utf-8"))
@@ -759,7 +763,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
         )
 
         gr.Markdown(
-            '<p class="xwave-brand">XWAVE COMPOSER</p>',
+            '<p class="xwave-brand"><span>XWAVE</span> COMPOSER</p>',
             elem_classes=["xwave-brand-wrap"],
         )
 
@@ -1636,6 +1640,9 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
             with gr.Tab("Library", elem_id="xwave-library-tab"):
                 _lib_ui = build_library_tab(library)
                 demo._xwave_library = _lib_ui  # type: ignore[attr-defined]
+
+            with gr.Tab("Settings", elem_id="xwave-settings-tab"):
+                build_settings_tab()
         # ── Callbacks ───────────────────────────────────────────
         pack_out = [
             work_html,

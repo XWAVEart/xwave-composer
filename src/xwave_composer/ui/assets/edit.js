@@ -109,7 +109,7 @@
     ctx.fillRect(0, 0, lay.viewW, lay.viewH);
     if (state.empty || !state.previewImg) {
       ctx.fillStyle = "#828a98";
-      ctx.font = "14px Inter, sans-serif";
+      ctx.font = '14px "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = "center";
       ctx.fillText("Load an image, then hover an object", lay.viewW / 2, lay.viewH / 2);
       return;
@@ -336,10 +336,10 @@
   function renderParams() {
     const spec = currentEffect();
     const box = $("xwave-fx-params");
-    const secondary = $("xwave-fx-secondary");
+    const secondaryWrap = $("xwave-fx-secondary-wrap");
     const warpWrap = $("xwave-fx-warp-wrap");
     if (!box || !spec) return;
-    if (secondary) secondary.classList.toggle("is-hidden", !spec.two_image);
+    if (secondaryWrap) secondaryWrap.classList.toggle("is-hidden", !spec.two_image);
     if (warpWrap) warpWrap.classList.toggle("is-hidden", !spec.warp);
     const previous = collectParams();
     box.innerHTML = "";

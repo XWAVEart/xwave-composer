@@ -34,6 +34,108 @@ def test_registry_includes_xlitch_catalog():
     assert coerce_params(drift, {})["intensity"] == 4.0
 
 
+# Keys from Xlitch Flask forms (forms.py) that must stay on the matching effect.
+_XLITCH_FORM_KEYS = {
+    "color_filter": {"filter_type", "blend_mode", "opacity", "color", "gradient_color2", "gradient_angle"},
+    "color_channel": {"manipulation_type", "swap_choice", "invert_choice", "adjust_choice", "intensity_factor"},
+    "channel_shift": {"shift_amount", "direction", "center_channel", "mode"},
+    "curved_hue_shift": {"curve_value", "shift_amount"},
+    "color_shift_expansion": {
+        "num_points", "shift_amount", "expansion_type", "mode", "pattern_type",
+        "color_theme", "saturation_boost", "value_boost", "decay_factor", "seed",
+    },
+    "histogram_glitch": {
+        "r_mode", "g_mode", "b_mode", "r_freq", "r_phase", "g_freq", "g_phase",
+        "b_freq", "b_phase", "gamma_value",
+    },
+    "posterize": {"levels"},
+    "advanced_pixel_sorting": {
+        "sort_by", "reverse_sort", "seed", "sorting_method", "chunk_width", "chunk_height",
+        "sort_mode", "starting_corner", "num_cells", "size_variation", "sort_order",
+        "voronoi_orientation", "start_position", "noise_scale", "pattern_width",
+        "perlin_chunk_width", "perlin_chunk_height", "direction", "polar_sort_by",
+        "chunk_size", "wrapped_chunk_width", "wrapped_chunk_height",
+        "wrapped_starting_corner", "wrapped_flow_direction",
+    },
+    "pixelate": {"width", "height", "attribute", "bins"},
+    "voronoi_pixelate": {"num_cells", "attribute", "seed"},
+    "gaussian_blur": {"radius", "sigma"},
+    "sharpen_effect": {
+        "method", "intensity", "radius", "threshold", "high_pass_radius",
+        "custom_kernel", "edge_enhancement",
+    },
+    "vhs_effect": {
+        "quality_preset", "scan_line_intensity", "scan_line_spacing", "static_intensity",
+        "static_type", "vertical_hold_frequency", "vertical_hold_intensity", "color_bleeding",
+        "chroma_shift", "tracking_errors", "tape_wear", "head_switching_noise",
+        "color_desaturation", "brightness_variation", "seed",
+    },
+    "concentric_shapes": {
+        "num_points", "shape_type", "thickness", "spacing", "rotation_angle",
+        "darken_step", "color_shift_amount", "seed",
+    },
+    "contour": {
+        "num_levels", "noise_std", "smooth_sigma", "line_thickness", "grad_threshold",
+        "min_distance", "max_line_length", "blur_kernel_size", "sobel_kernel_size", "seed",
+    },
+    "pixel_drift": {"direction", "bands", "intensity"},
+    "perlin_displacement": {"scale", "intensity", "octaves", "seed"},
+    "wave_distortion": {
+        "wave_type", "amplitude", "frequency", "phase", "secondary_wave",
+        "secondary_amplitude", "secondary_frequency", "secondary_phase",
+        "blend_mode", "edge_behavior", "interpolation",
+    },
+    "ripple": {
+        "num_droplets", "amplitude", "frequency", "decay", "distortion_type",
+        "color_r_factor", "color_g_factor", "color_b_factor", "pixelation_scale",
+        "pixelation_magnitude", "seed",
+    },
+    "pixel_scatter": {"direction", "select_by", "min_value", "max_value"},
+    "offset": {"x_value", "x_unit", "y_value", "y_unit"},
+    "slice_block_manipulation": {
+        "manipulation_type", "orientation", "slice_count", "max_offset", "offset_mode",
+        "frequency", "reduction_value", "block_width", "block_height", "seed",
+    },
+    "bit_manipulation": {
+        "chunk_size", "offset", "xor_value", "skip_pattern", "manipulation_type",
+        "shift_amount", "randomize_effect", "seed",
+    },
+    "data_mosh_blocks": {
+        "operations", "block_size", "movement", "color_swap", "invert_colors",
+        "shift_values", "flip_blocks", "seed",
+    },
+    "databend": {"intensity", "preserve_header", "seed"},
+    "jpeg_artifacts": {"intensity"},
+    "noise_effect": {
+        "noise_type", "intensity", "grain_size", "color_variation", "noise_color",
+        "blend_mode", "pattern", "seed",
+    },
+    "chromatic_aberration": {
+        "intensity", "pattern", "red_shift_x", "red_shift_y", "blue_shift_x",
+        "blue_shift_y", "center_x", "center_y", "falloff", "edge_enhancement",
+        "color_boost", "seed",
+    },
+    "double_expose": {"blend_mode", "opacity"},
+    "masked_merge": {
+        "mask_type", "mask_width", "mask_height", "stripe_width", "stripe_angle",
+        "gradient_direction", "perlin_noise_scale", "perlin_threshold", "perlin_octaves",
+        "voronoi_num_cells", "rectangle_band_width", "circle_band_width",
+        "circle_origin", "triangle_size", "seed",
+    },
+}
+
+
+def test_every_xlitch_form_control_is_on_the_effect():
+    ids = {spec.id for spec in list_effects()}
+    assert ids == set(_XLITCH_FORM_KEYS)
+    for effect_id, keys in _XLITCH_FORM_KEYS.items():
+        have = {param.key for param in get_effect(effect_id).params}
+        missing = keys - have
+        assert not missing, f"{effect_id} missing {sorted(missing)}"
+    expand = coerce_params(get_effect("color_shift_expansion"), {})
+    assert expand["mode"] == "xtreme"
+
+
 def test_generate_noise_map_is_vectorized_and_seeded():
     a = generate_noise_map((24, 32), scale=12, octaves=2, base=7)
     b = generate_noise_map((24, 32), scale=12, octaves=2, base=7)

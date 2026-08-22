@@ -46,6 +46,25 @@
     magenta: "rgba(232, 121, 249, 0.85)",
   };
 
+  // Selection chrome follows the UI accent (Settings tab); cached briefly
+  // since draw() runs on pointermove.
+  let themeColors = { accent: "#5eead4", warn: "#f59e0b", at: 0 };
+
+  function selectionColors() {
+    const now = Date.now();
+    if (now - themeColors.at > 500) {
+      const cs = getComputedStyle(document.documentElement);
+      const accent = (cs.getPropertyValue("--xw-accent") || "").trim();
+      const warn = (cs.getPropertyValue("--xw-warn") || "").trim();
+      themeColors = {
+        accent: accent || "#5eead4",
+        warn: warn || "#f59e0b",
+        at: now,
+      };
+    }
+    return themeColors;
+  }
+
   const GRID_STORAGE_TYPE = "xwave.workGrid.type";
   const GRID_STORAGE_COLOR = "xwave.workGrid.color";
 
@@ -478,13 +497,14 @@
     if (sel && sel.visible !== false) {
       const sz = layerSize(sel);
       const hs = HANDLE / state.viewScale;
+      const colors = selectionColors();
       ctx.save();
       ctx.translate(sel.x, sel.y);
       ctx.rotate(((sel.rotation || 0) * Math.PI) / 180);
-      ctx.strokeStyle = "#5eead4";
+      ctx.strokeStyle = colors.accent;
       ctx.lineWidth = 1.75 / state.viewScale;
       ctx.strokeRect(-sz.w / 2, -sz.h / 2, sz.w, sz.h);
-      ctx.fillStyle = "#5eead4";
+      ctx.fillStyle = colors.accent;
       [
         [-sz.w / 2, -sz.h / 2],
         [sz.w / 2, -sz.h / 2],
@@ -499,7 +519,7 @@
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(0, -sz.h / 2 - ROT_OFFSET / state.viewScale, hs * 0.65, 0, Math.PI * 2);
-      ctx.fillStyle = "#f59e0b";
+      ctx.fillStyle = colors.warn;
       ctx.fill();
       ctx.restore();
     }

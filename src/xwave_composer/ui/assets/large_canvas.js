@@ -28,6 +28,21 @@
     return document.getElementById(id);
   }
 
+  // Region stamp follows the UI accent (Settings tab); cached briefly
+  // since draw() runs on pointermove.
+  let accentCache = { color: "#5eead4", at: 0 };
+
+  function accentColor() {
+    const now = Date.now();
+    if (now - accentCache.at > 500) {
+      const v = (
+        getComputedStyle(document.documentElement).getPropertyValue("--xw-accent") || ""
+      ).trim();
+      accentCache = { color: v || "#5eead4", at: now };
+    }
+    return accentCache.color;
+  }
+
   function findActionInput() {
     const root = $("xwave-lc-action");
     if (!root) return null;
@@ -252,13 +267,17 @@
 
     // region
     const s = state.stamp;
-    ctx.strokeStyle = "rgba(94, 234, 212, 0.95)";
+    const accent = accentColor();
+    ctx.strokeStyle = accent;
+    ctx.globalAlpha = 0.95;
     ctx.lineWidth = 2 / state.zoom;
     ctx.setLineDash([8 / state.zoom, 6 / state.zoom]);
     ctx.strokeRect(s.x + 0.5, s.y + 0.5, s.w - 1, s.h - 1);
     ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(94, 234, 212, 0.08)";
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = accent;
     ctx.fillRect(s.x, s.y, s.w, s.h);
+    ctx.globalAlpha = 1;
 
     ctx.restore();
 
